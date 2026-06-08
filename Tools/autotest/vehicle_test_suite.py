@@ -19,6 +19,7 @@ import math
 import operator
 import os
 import pathlib
+import queue
 import random
 import re
 import shutil
@@ -60,11 +61,6 @@ from pymavlink.rotmat import Vector3
 
 from pysim import util
 from pysim import vehicleinfo
-
-try:
-    import queue as Queue
-except ImportError:
-    import Queue
 
 
 # Enumeration convenience class for mavlink POSITION_TARGET_TYPEMASK
@@ -2054,7 +2050,7 @@ class TestSuite(abc.ABC):
 
         self.rc_thread = None
         self.rc_thread_should_quit = False
-        self.rc_queue = Queue.Queue()
+        self.rc_queue = queue.Queue()
 
         self.expect_list = []
 
@@ -5895,7 +5891,7 @@ class TestSuite(abc.ABC):
                     if i in map_copy:
                         chan16[i-1] = map_copy[i]
 
-            except Queue.Empty:
+            except queue.Empty:
                 pass
 
             buf = struct.pack('<HHHHHHHHHHHHHHHH', *chan16)
@@ -15274,6 +15270,93 @@ switch value'''
         self.ftp_recv(timeout=5)
 
         return data, eof_nack
+
+    def ftp_write_file(self, path, data):
+        '''write bytes to a remote path via MAVLink FTP (CreateFile + WriteFile)'''
+        data = bytearray(data)
+
+        # ResetSessions
+        op = FTP_OP(
+            seq=0, session=0, opcode=mavftp_op.OP_ResetSessions,
+            size=0, req_opcode=0, burst_complete=0, offset=0, payload=None,
+        )
+        self.ftp_send(op)
+        reply = self.ftp_recv(timeout=5)
+        if reply is None:
+            raise NotAchievedException("No reply to ResetSessions")
+        seq = reply.seq
+
+        # CreateFile (open write-truncate)
+        path_bytes = bytearray(path.encode('utf-8')) + bytearray([0])
+        op = FTP_OP(
+            seq=seq, session=0, opcode=mavftp_op.OP_CreateFile,
+            size=len(path_bytes), req_opcode=0, burst_complete=0,
+            offset=0, payload=path_bytes,
+        )
+        self.ftp_send(op)
+        reply = self.ftp_recv(timeout=5)
+        if reply is None:
+            raise NotAchievedException("No reply to CreateFile")
+        if reply.opcode != mavftp_op.OP_Ack:
+            raise NotAchievedException(f"CreateFile failed: opcode={reply.opcode}")
+        seq = reply.seq
+
+        # WriteFile in FTP_MAX_PAYLOAD-byte chunks
+        offset = 0
+        while offset < len(data):
+            chunk = data[offset:offset + FTP_MAX_PAYLOAD]
+            op = FTP_OP(
+                seq=seq, session=0, opcode=mavftp_op.OP_WriteFile,
+                size=len(chunk), req_opcode=0, burst_complete=0,
+                offset=offset, payload=chunk,
+            )
+            self.ftp_send(op)
+            reply = self.ftp_recv(timeout=5)
+            if reply is None:
+                raise NotAchievedException(f"No reply to WriteFile at offset {offset}")
+            if reply.opcode != mavftp_op.OP_Ack:
+                raise NotAchievedException(f"WriteFile failed at offset {offset}: opcode={reply.opcode}")
+            seq = reply.seq
+            offset += len(chunk)
+
+        # TerminateSession
+        op = FTP_OP(
+            seq=seq, session=0, opcode=mavftp_op.OP_TerminateSession,
+            size=0, req_opcode=0, burst_complete=0, offset=0, payload=None,
+        )
+        self.ftp_send(op)
+        self.ftp_recv(timeout=5)
+
+    def ftp_create_directory(self, path):
+        '''create a remote directory via MAVLink FTP; ignores error if it already exists'''
+        path_bytes = bytearray(path.encode('utf-8')) + bytearray([0])
+        op = FTP_OP(
+            seq=0, session=0, opcode=mavftp_op.OP_CreateDirectory,
+            size=len(path_bytes), req_opcode=0, burst_complete=0,
+            offset=0, payload=path_bytes,
+        )
+        self.ftp_send(op)
+        reply = self.ftp_recv(timeout=5)
+        if reply is None:
+            raise NotAchievedException("No reply to CreateDirectory")
+        # Nack is acceptable if directory already exists
+        if reply.opcode not in (mavftp_op.OP_Ack, mavftp_op.OP_Nack):
+            raise NotAchievedException(f"CreateDirectory unexpected opcode={reply.opcode}")
+
+    def ftp_remove_file(self, path):
+        '''remove a remote file via MAVLink FTP (RemoveFile)'''
+        path_bytes = bytearray(path.encode('utf-8')) + bytearray([0])
+        op = FTP_OP(
+            seq=0, session=0, opcode=mavftp_op.OP_RemoveFile,
+            size=len(path_bytes), req_opcode=0, burst_complete=0,
+            offset=0, payload=path_bytes,
+        )
+        self.ftp_send(op)
+        reply = self.ftp_recv(timeout=5)
+        if reply is None:
+            raise NotAchievedException("No reply to RemoveFile")
+        if reply.opcode != mavftp_op.OP_Ack:
+            raise NotAchievedException(f"RemoveFile failed for {path}: opcode={reply.opcode}")
 
     def verify_ftp_burst_eof(self, data, eof_nack, expected_size, label):
         '''verify burst read EOF NAK is correct'''
