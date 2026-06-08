@@ -54,8 +54,16 @@ assert(MAV_SYSID, "leader_failover: MAV_SYSID parameter not found")
 local FOLL_SYSID = bind_parameter("FOLL_SYSID")
 assert(FOLL_SYSID, "leader_failover: FOLL_SYSID parameter not found")
 
-local own_sysid = math.floor(MAV_SYSID:get())
-local configured_leader = math.floor(FOLL_SYSID:get())
+local mav_sysid_value = MAV_SYSID:get()
+local foll_sysid_value = FOLL_SYSID:get()
+if mav_sysid_value == nil or foll_sysid_value == nil then
+    gcs:send_text(MAV_SEVERITY.ERROR,
+                  "Leader failover: failed to read SYSID params")
+    return
+end
+
+local own_sysid = math.floor(mav_sysid_value)
+local configured_leader = math.floor(foll_sysid_value)
 local current_leader = configured_leader
 if current_leader <= 0 or current_leader == own_sysid then
     current_leader = Priority_List[1]
