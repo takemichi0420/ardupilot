@@ -38,20 +38,20 @@ local STATE_NORMAL = 0
 local STATE_SUSPECT = 1
 local STATE_CONFIRMED = 2
 
-local function bind_parameter(...)
-    for i = 1, select("#", ...) do
+local function bind_parameter(names)
+    for i = 1, #names do
         local parameter = Parameter()
-        if parameter:init(select(i, ...)) then
+        if parameter:init(names[i]) then
             return parameter
         end
     end
     return nil
 end
 
-local MAV_SYSID = bind_parameter("MAV_SYSID", "SYSID_THISMAV")
+local MAV_SYSID = bind_parameter({"MAV_SYSID", "SYSID_THISMAV"})
 assert(MAV_SYSID, "leader_failover: MAV_SYSID parameter not found")
 
-local FOLL_SYSID = bind_parameter("FOLL_SYSID")
+local FOLL_SYSID = bind_parameter({"FOLL_SYSID"})
 assert(FOLL_SYSID, "leader_failover: FOLL_SYSID parameter not found")
 
 local mav_sysid_value = MAV_SYSID:get()
