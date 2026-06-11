@@ -13,6 +13,7 @@ local HEARTBEAT_TIMEOUT_MS = 2000
 local SUSPECT_CONFIRM_MS = 5000
 local ALIVE_TIMEOUT_MS = 2000
 local COOLDOWN_MS = 30000
+local ERROR_REPEAT_MS = 10000
 
 local MODE_AUTO = 3
 local MODE_FOLLOW = 23
@@ -74,8 +75,13 @@ local suspect_start_ms = nil
 local suspect_reason = nil
 local cooldown_start_ms = nil
 local last_leader_mission_current = nil
+local last_leader_mission_total = nil
 local monitoring_start_ms = millis()
 local last_failover_attempt_ms = nil
+local mission_compatible = nil
+local waiting_candidate = nil
+local last_failover_error = nil
+local last_failover_error_ms = nil
 
 local vehicle_data = {}
 for _, sysid in ipairs(Priority_List) do
@@ -132,6 +138,10 @@ local function decode_message(message)
         decoded.hdg = string.unpack("<I4i4i4i4i4i2i2i2I2", message, 13)
     elseif msgid == MSG_ID.MISSION_CURRENT then
         decoded.seq = string.unpack("<I2", message, 13)
+        local payload_length = string.unpack("<B", message, 4)
+        if payload_length >= 4 then
+            decoded.total = string.unpack("<I2", message, 15)
+        end
     elseif msgid == MSG_ID.EXTENDED_SYS_STATE then
         decoded.vtol_state, decoded.landed_state = string.unpack("<BB", message, 13)
     elseif msgid == MSG_ID.STATUSTEXT then
@@ -154,6 +164,49 @@ mavlink:register_rx_msgid(MSG_ID.ATTITUDE)
 
 local function send_text(severity, text)
     gcs:send_text(severity, "Leader failover: " .. text)
+end
+
+local function get_local_mission_total()
+    local command_count = mission:num_commands()
+    if command_count == 0 then
+        return 0
+    end
+    -- MISSION_CURRENT.total excludes the home item at index zero.
+    return command_count - 1
+end
+
+local function check_mission_compatibility(leader_total)
+    if leader_total == nil or leader_total == 0 or leader_total == 65535 then
+        return
+    end
+
+    local local_total = get_local_mission_total()
+    local compatible = local_total == leader_total
+    if compatible == mission_compatible then
+        return
+    end
+
+    mission_compatible = compatible
+    if compatible then
+        send_text(MAV_SEVERITY.INFO,
+                  string.format("mission match: %d items", local_total))
+    else
+        send_text(MAV_SEVERITY.ERROR,
+                  string.format("mission mismatch: local %d, leader %d",
+                                local_total, leader_total))
+    end
+end
+
+local function report_failover_error(now_ms, text)
+    if text == last_failover_error and
+       last_failover_error_ms ~= nil and
+       now_ms - last_failover_error_ms < ERROR_REPEAT_MS then
+        return
+    end
+
+    last_failover_error = text
+    last_failover_error_ms = now_ms
+    send_text(MAV_SEVERITY.ERROR, text)
 end
 
 local function enter_suspect(now_ms, reason)
@@ -187,33 +240,69 @@ local function select_new_leader(now_ms, failed_leader)
     for _, sysid in ipairs(Priority_List) do
         if sysid ~= failed_leader then
             if sysid == own_sysid then
-                return sysid
+                return sysid, nil
             end
 
-            local heartbeat_ms = get_vehicle_data(sysid).heartbeat_ms
+            local data = get_vehicle_data(sysid)
+            local heartbeat_ms = data.heartbeat_ms
             if heartbeat_ms ~= nil and now_ms - heartbeat_ms <= ALIVE_TIMEOUT_MS then
-                return sysid
+                if data.custom_mode == MODE_AUTO then
+                    return sysid, nil
+                end
+                -- A lower-priority vehicle must not promote itself while a
+                -- higher-priority replacement is alive and still promoting.
+                return nil, sysid
             end
         end
     end
-    return nil
+    return nil, nil
 end
 
-local function become_mission_leader(new_leader)
+local function become_mission_leader(new_leader, now_ms)
     if last_leader_mission_current == nil then
-        send_text(MAV_SEVERITY.ERROR,
-                  string.format("SYSID %d selected, mission current unknown", new_leader))
+        report_failover_error(
+            now_ms,
+            string.format("SYSID %d selected, mission current unknown", new_leader))
+        return false
+    end
+
+    local command_count = mission:num_commands()
+    local local_total = get_local_mission_total()
+    if local_total == 0 then
+        report_failover_error(
+            now_ms,
+            string.format("SYSID %d cannot lead: no local mission", new_leader))
+        return false
+    end
+
+    if last_leader_mission_total ~= nil and
+       last_leader_mission_total ~= 65535 and
+       local_total ~= last_leader_mission_total then
+        report_failover_error(
+            now_ms,
+            string.format("cannot lead: mission local %d, leader %d",
+                          local_total, last_leader_mission_total))
+        return false
+    end
+
+    if last_leader_mission_current < 0 or
+       last_leader_mission_current >= command_count then
+        report_failover_error(
+            now_ms,
+            string.format("mission command %d outside local 0-%d",
+                          last_leader_mission_current, command_count - 1))
         return false
     end
 
     if not mission:set_current_cmd(last_leader_mission_current) then
-        send_text(MAV_SEVERITY.ERROR,
-                  string.format("mission command %d rejected", last_leader_mission_current))
+        report_failover_error(
+            now_ms,
+            string.format("mission command %d rejected", last_leader_mission_current))
         return false
     end
 
     if vehicle:get_mode() ~= MODE_AUTO and not vehicle:set_mode(MODE_AUTO) then
-        send_text(MAV_SEVERITY.ERROR, "failed to enter AUTO")
+        report_failover_error(now_ms, "failed to enter AUTO")
         return false
     end
 
@@ -246,15 +335,25 @@ local function attempt_failover(now_ms)
     local failed_leader = current_leader
     last_failover_attempt_ms = now_ms
 
-    local new_leader = select_new_leader(now_ms, failed_leader)
+    local new_leader, candidate = select_new_leader(now_ms, failed_leader)
     if new_leader == nil then
-        send_text(MAV_SEVERITY.ERROR, "no alive replacement leader")
+        if candidate ~= nil then
+            if waiting_candidate ~= candidate then
+                waiting_candidate = candidate
+                send_text(MAV_SEVERITY.INFO,
+                          string.format("waiting for SYSID %d to enter AUTO", candidate))
+            end
+        else
+            waiting_candidate = nil
+            report_failover_error(now_ms, "no alive replacement leader")
+        end
         return
     end
 
+    waiting_candidate = nil
     local changed
     if new_leader == own_sysid then
-        changed = become_mission_leader(new_leader)
+        changed = become_mission_leader(new_leader, now_ms)
     else
         changed = follow_new_leader(new_leader)
     end
@@ -265,6 +364,8 @@ local function attempt_failover(now_ms)
         suspect_start_ms = nil
         suspect_reason = nil
         last_failover_attempt_ms = nil
+        last_failover_error = nil
+        last_failover_error_ms = nil
         cooldown_start_ms = now_ms
         send_text(MAV_SEVERITY.INFO, "30 second failover cooldown started")
     end
@@ -287,6 +388,8 @@ local function handle_message(message, receive_ms)
     local data = get_vehicle_data(decoded.sysid)
     if decoded.msgid == MSG_ID.HEARTBEAT then
         data.heartbeat_ms = receive_ms
+        data.custom_mode = decoded.custom_mode
+        data.base_mode = decoded.base_mode
     elseif decoded.msgid == MSG_ID.GLOBAL_POSITION_INT then
         data.position_ms = receive_ms
         data.relative_alt = decoded.relative_alt
@@ -296,8 +399,13 @@ local function handle_message(message, receive_ms)
         -- alt == 0 is deliberately not used as crash evidence.
     elseif decoded.msgid == MSG_ID.MISSION_CURRENT then
         data.mission_current = decoded.seq
+        data.mission_total = decoded.total
         if decoded.sysid == current_leader then
             last_leader_mission_current = decoded.seq
+            if decoded.total ~= nil then
+                last_leader_mission_total = decoded.total
+                check_mission_compatibility(decoded.total)
+            end
         end
     elseif decoded.msgid == MSG_ID.EXTENDED_SYS_STATE then
         data.landed_state = decoded.landed_state
