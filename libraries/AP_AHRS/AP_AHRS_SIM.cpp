@@ -103,7 +103,9 @@ bool AP_AHRS_SIM::get_filter_status(nav_filter_status &status) const
     status.flags.vert_pos = true;
     status.flags.pred_horiz_pos_rel = true;
     status.flags.pred_horiz_pos_abs = true;
+    status.flags.initalized = true;
     status.flags.using_gps = true;
+    status.flags.terrain_alt = true;
 
     return true;
 }
@@ -113,25 +115,6 @@ void AP_AHRS_SIM::get_control_limits(float &ekfGndSpdLimit, float &ekfNavVelGain
     // same as EKF2 for no optical flow
     ekfGndSpdLimit = 400.0f;
     ekfNavVelGainScaler = 1.0f;
-}
-
-void AP_AHRS_SIM::send_ekf_status_report(GCS_MAVLINK &link) const
-{
-#if HAL_GCS_ENABLED
-    // send status report with everything looking good
-    const uint16_t flags =
-        EKF_ATTITUDE | /* Set if EKF's attitude estimate is good. | */
-        EKF_VELOCITY_HORIZ | /* Set if EKF's horizontal velocity estimate is good. | */
-        EKF_VELOCITY_VERT | /* Set if EKF's vertical velocity estimate is good. | */
-        EKF_POS_HORIZ_REL | /* Set if EKF's horizontal position (relative) estimate is good. | */
-        EKF_POS_HORIZ_ABS | /* Set if EKF's horizontal position (absolute) estimate is good. | */
-        EKF_POS_VERT_ABS | /* Set if EKF's vertical position (absolute) estimate is good. | */
-        EKF_POS_VERT_AGL | /* Set if EKF's vertical position (above ground) estimate is good. | */
-        //EKF_CONST_POS_MODE | /* EKF is in constant position mode and does not know it's absolute or relative position. | */
-        EKF_PRED_POS_HORIZ_REL | /* Set if EKF's predicted horizontal position (relative) estimate is good. | */
-        EKF_PRED_POS_HORIZ_ABS; /* Set if EKF's predicted horizontal position (absolute) estimate is good. | */
-    mavlink_msg_ekf_status_report_send(link.get_chan(), flags, 0, 0, 0, 0, 0, 0);
-#endif // HAL_GCS_ENABLED
 }
 
 bool AP_AHRS_SIM::get_origin(Location &ret) const
@@ -154,17 +137,6 @@ bool AP_AHRS_SIM::get_innovations(Vector3f &velInnov, Vector3f &posInnov, Vector
     magInnov.zero();
     tasInnov = 0.0f;
     yawInnov = 0.0f;
-
-    return true;
-}
-
-bool AP_AHRS_SIM::get_variances(float &velVar, float &posVar, float &hgtVar, Vector3f &magVar, float &tasVar) const
-{
-    velVar = 0;
-    posVar = 0;
-    hgtVar = 0;
-    magVar.zero();
-    tasVar = 0;
 
     return true;
 }
@@ -236,6 +208,29 @@ void AP_AHRS_SIM::get_results(AP_AHRS_Backend::Estimates &results)
     // for this estimator.  Used to decide whether GPS will set
     // the navigation origin:
     results.configured_to_use_gps_for_pos_XY = true;
+
+    // are we consuming yaw from an external (e.g. vision-based) source?
+    // results.using_extnav_for_yaw = false;
+
+    // are we consuming yaw from a source which is *not* a compass
+    // (e.g. the GSF)
+    // results.using_noncompass_for_yaw = false;
+
+    /*
+     * filter status and estimates quality values:
+     */
+    results.filter_status_valid = get_filter_status(results.filter_status);
+
+    // provides the innovations normalised between 0 and 1:
+    // velVar = 0;
+    // posVar = 0;
+    // hgtVar = 0;
+    // magVar.zero();
+    // tasVar = 0;
+    results.variances_valid = true;
+
+    // terrain_alt_variance = 0;
+    results.terrain_alt_variance_valid = true;
 
 #if HAL_NAVEKF3_AVAILABLE
     if (_sitl->odom_enable) {

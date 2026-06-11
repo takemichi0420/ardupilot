@@ -103,6 +103,25 @@ void AP_AHRS_NavEKF3::get_results(AP_AHRS_Backend::Estimates &results)
     // for this estimator.  Used to decide whether GPS will set
     // the navigation origin:
     results.configured_to_use_gps_for_pos_XY = EKF3.configuredToUseGPSForPos();
+
+    // are we consuming yaw from an external (e.g. vision-based) source?
+    results.using_extnav_for_yaw = EKF3.using_extnav_for_yaw();
+
+    // are we consuming yaw from a source which is *not* a compass
+    // (e.g. the GSF)
+    results.using_noncompass_for_yaw = EKF3.using_noncompass_for_yaw();
+
+    /*
+     * filter status and estimates quality values:
+     */
+    EKF3.getFilterStatus(results.filter_status);
+    results.filter_status_valid = true;
+
+    // provides the innovations normalised between 0 and 1:
+    Vector2f offset;
+    results.variances_valid = EKF3.getVariances(results.velVar, results.posVar, results.hgtVar, results.magVar, results.tasVar, offset);
+
+    results.terrain_alt_variance_valid = EKF3.getTerrainAltVariance(results.terrain_alt_variance);
 }
 
 bool AP_AHRS_NavEKF3::pre_arm_check(bool requires_position, char *failure_msg, uint8_t failure_msg_len) const

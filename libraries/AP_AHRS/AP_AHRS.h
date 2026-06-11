@@ -367,7 +367,8 @@ public:
 
     // get_filter_status - returns filter status as a series of flags
     bool get_filter_status(nav_filter_status &status) const {
-        return configured_backend->get_filter_status(status);
+        status = configured_estimates->filter_status;
+        return configured_estimates->filter_status_valid;
     }
 
     // get compass offset estimates
@@ -429,7 +430,12 @@ public:
     // inconsistency that will be accepted by the filter
     // boolean false is returned if variances are not available
     bool get_variances(float &velVar, float &posVar, float &hgtVar, Vector3f &magVar, float &tasVar) const {
-        return configured_backend->get_variances(velVar, posVar, hgtVar, magVar, tasVar);
+        velVar = configured_estimates->velVar;
+        posVar = configured_estimates->posVar;
+        hgtVar = configured_estimates->hgtVar;
+        magVar = configured_estimates->magVar;
+        tasVar = configured_estimates->tasVar;
+        return configured_estimates->variances_valid;
     }
 
     // get 1-sigma position and velocity uncertainty derived from the EKF state error covariance matrix P
@@ -466,10 +472,14 @@ public:
     uint8_t get_primary_gyro_index(void) const { return state.primary_gyro; }
 
     // see if EKF lane switching is possible to avoid EKF failsafe
-    void check_lane_switch(void);
+    void check_lane_switch(void) {
+        active_backend->check_lane_switch();
+    }
 
     // request EKF yaw reset to try and avoid the need for an EKF lane switch or failsafe
-    void request_yaw_reset(void);
+    void request_yaw_reset(void) {
+        active_backend->request_yaw_reset();
+    }
 
 #if AP_AHRS_EKF_RESET_ENABLED
     // request full backend reset, currently only implemented for EKF3
@@ -1139,6 +1149,7 @@ private:
     // configured_backend is the backend the user wants to use as
     // indicated by parameter values
     AP_AHRS_Backend *configured_backend;
+    AP_AHRS_Backend::Estimates *configured_estimates;
 
     // active_backend is the backend which is currently providing
     // results (e.g. this may be a fallback estimator if the

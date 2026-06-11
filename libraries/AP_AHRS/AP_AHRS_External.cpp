@@ -87,6 +87,25 @@ void AP_AHRS_External::get_results(AP_AHRS_Backend::Estimates &results)
     // for this estimator.  Used to decide whether GPS will set
     // the navigation origin.
     results.configured_to_use_gps_for_pos_XY = true;
+
+    // are we consuming yaw from an external (e.g. vision-based) source?
+    // this relates only to external sources being passed in via mavlink
+    // results.using_extnav_for_yaw = false;
+
+    // are we consuming yaw from a source which is *not* a compass
+    // results.using_noncompass_for_yaw = false;
+
+    /*
+     * filter status and estimates quality values:
+     */
+    AP::externalAHRS().get_filter_status(results.filter_status);
+    results.filter_status_valid = true;
+
+    // provides the innovations normalised between 0 and 1:
+    results.variances_valid = AP::externalAHRS().get_variances(results.velVar, results.posVar, results.hgtVar, results.magVar, results.tasVar);
+
+    results.terrain_alt_variance = 0;
+    results.terrain_alt_variance_valid = true;
 }
 
 bool AP_AHRS_External::get_relative_position_NED_origin(Vector3p &vec) const
@@ -132,22 +151,6 @@ bool AP_AHRS_External::get_relative_position_D_origin(postype_t &posD) const
 bool AP_AHRS_External::pre_arm_check(bool requires_position, char *failure_msg, uint8_t failure_msg_len) const
 {
     return AP::externalAHRS().pre_arm_check(failure_msg, failure_msg_len);
-}
-
-bool AP_AHRS_External::get_filter_status(nav_filter_status &status) const
-{
-    AP::externalAHRS().get_filter_status(status);
-    return true;
-}
-
-bool AP_AHRS_External::get_variances(float &velVar, float &posVar, float &hgtVar, Vector3f &magVar, float &tasVar) const
-{
-    return AP::externalAHRS().get_variances(velVar, posVar, hgtVar, magVar, tasVar);
-}
-
-void AP_AHRS_External::send_ekf_status_report(GCS_MAVLINK &link) const
-{
-    AP::externalAHRS().send_status_report(link);
 }
 
 bool AP_AHRS_External::get_origin(Location &ret) const

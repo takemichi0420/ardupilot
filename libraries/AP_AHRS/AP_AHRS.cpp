@@ -303,6 +303,7 @@ void AP_AHRS::update_configured_ekf_type()
     if (new_backend != nullptr) {
         state.configured_ekf_type = new_type;
         configured_backend = new_backend;
+        configured_estimates = estimates_for_type(new_type);
         return;
     }
     INTERNAL_ERROR(AP_InternalError::error_t::flow_of_control);
@@ -682,9 +683,7 @@ void AP_AHRS::update_EKF2(void)
         ekf2_estimates = {};
         ekf2.get_results(ekf2_estimates);
         if (_active_EKF_type() == EKFType::TWO) {
-            nav_filter_status filt_state;
-            ekf2.get_filter_status(filt_state);
-            update_notify_from_filter_status(filt_state);
+            update_notify_from_filter_status(ekf2_estimates.filter_status);
         }
 
         /*
@@ -734,9 +733,7 @@ void AP_AHRS::update_EKF3(void)
         ekf3_estimates = {};
         ekf3.get_results(ekf3_estimates);
         if (_active_EKF_type() == EKFType::THREE) {
-            nav_filter_status filt_state;
-            ekf3.get_filter_status(filt_state);
-            update_notify_from_filter_status(filt_state);
+            update_notify_from_filter_status(ekf3_estimates.filter_status);
         }
         /*
           if we now have an origin then set in all backends
@@ -1755,24 +1752,24 @@ AP_AHRS::EKFType AP_AHRS::_active_EKF_type(void) const
             break;
 #if HAL_NAVEKF2_AVAILABLE
         case EKFType::TWO:
-            ekf2.get_filter_status(filt_state);
+            filt_state = ekf2_estimates.filter_status;
             should_use_gps = ekf2.EKF2.configuredToUseGPSForPosXY();
             break;
 #endif
 #if HAL_NAVEKF3_AVAILABLE
         case EKFType::THREE:
-            ekf3.get_filter_status(filt_state);
+            filt_state = ekf3_estimates.filter_status;
             should_use_gps = ekf3.EKF3.configuredToUseGPSForPosXY();
             break;
 #endif
 #if AP_AHRS_SIM_ENABLED
         case EKFType::SIM:
-            get_filter_status(filt_state);
+            filt_state = sim_estimates.filter_status;
             break;
 #endif
 #if AP_AHRS_EXTERNAL_ENABLED
         case EKFType::EXTERNAL:
-            get_filter_status(filt_state);
+            filt_state = external_estimates.filter_status;
             should_use_gps = true;
             break;
 #endif
@@ -2312,11 +2309,77 @@ void AP_AHRS::resetHeightDatum(void)
     }
 }
 
+#if HAL_GCS_ENABLED
 // send a EKF_STATUS_REPORT for configured EKF
 void AP_AHRS::send_ekf_status_report(GCS_MAVLINK &link) const
 {
-    configured_backend->send_ekf_status_report(link);
+    // get filter status
+    if (!configured_estimates->filter_status_valid) {
+        return;
+    }
+
+    // get variances
+    if (!configured_estimates->variances_valid) {
+        return;
+    }
+
+    if (!configured_estimates->terrain_alt_variance_valid) {
+        return;
+    }
+
+    // prepare flags
+    uint16_t flags = 0;
+    if (configured_estimates->filter_status.flags.attitude) {
+        flags |= EKF_ATTITUDE;
+    }
+    if (configured_estimates->filter_status.flags.horiz_vel) {
+        flags |= EKF_VELOCITY_HORIZ;
+    }
+    if (configured_estimates->filter_status.flags.vert_vel) {
+        flags |= EKF_VELOCITY_VERT;
+    }
+    if (configured_estimates->filter_status.flags.horiz_pos_rel) {
+        flags |= EKF_POS_HORIZ_REL;
+    }
+    if (configured_estimates->filter_status.flags.horiz_pos_abs) {
+        flags |= EKF_POS_HORIZ_ABS;
+    }
+    if (configured_estimates->filter_status.flags.vert_pos) {
+        flags |= EKF_POS_VERT_ABS;
+    }
+    if (configured_estimates->filter_status.flags.terrain_alt) {
+        flags |= EKF_POS_VERT_AGL;
+    }
+    if (configured_estimates->filter_status.flags.const_pos_mode) {
+        flags |= EKF_CONST_POS_MODE;
+    }
+    if (configured_estimates->filter_status.flags.pred_horiz_pos_rel) {
+        flags |= EKF_PRED_POS_HORIZ_REL;
+    }
+    if (configured_estimates->filter_status.flags.pred_horiz_pos_abs) {
+        flags |= EKF_PRED_POS_HORIZ_ABS;
+    }
+    if (!configured_estimates->filter_status.flags.initalized) {
+        flags |= EKF_UNINITIALIZED;
+    }
+    if (configured_estimates->filter_status.flags.gps_glitching) {
+        flags |= (1<<15);
+    }
+
+    const mavlink_ekf_status_report_t packet{
+        configured_estimates->velVar,
+        configured_estimates->posVar,
+        configured_estimates->hgtVar,
+        fmaxf(fmaxf(configured_estimates->magVar.x, configured_estimates->magVar.y), configured_estimates->magVar.z),
+        configured_estimates->terrain_alt_variance,
+        flags,
+        configured_estimates->tasVar
+    };
+
+    // send message
+    mavlink_msg_ekf_status_report_send_struct(link.get_chan(), &packet);
 }
+#endif  // HAL_GCS_ENABLED
 
 // return origin for a specified EKF type
 bool AP_AHRS::_get_origin(EKFType type, Location &ret) const
@@ -2619,71 +2682,6 @@ int8_t AP_AHRS::_get_primary_core_index() const
     return -1;
 }
 
-// see if EKF lane switching is possible to avoid EKF failsafe
-void AP_AHRS::check_lane_switch(void)
-{
-    switch (active_EKF_type()) {
-#if AP_AHRS_DCM_ENABLED
-    case EKFType::DCM:
-        break;
-#endif
-
-#if AP_AHRS_SIM_ENABLED
-    case EKFType::SIM:
-        break;
-#endif
-
-#if AP_AHRS_EXTERNAL_ENABLED
-    case EKFType::EXTERNAL:
-        break;
-#endif
-        
-#if HAL_NAVEKF2_AVAILABLE
-    case EKFType::TWO:
-        ekf2.EKF2.checkLaneSwitch();
-        break;
-#endif
-
-#if HAL_NAVEKF3_AVAILABLE
-    case EKFType::THREE:
-        ekf3.EKF3.checkLaneSwitch();
-        break;
-#endif
-    }
-}
-
-// request EKF yaw reset to try and avoid the need for an EKF lane switch or failsafe
-void AP_AHRS::request_yaw_reset(void)
-{
-    switch (active_EKF_type()) {
-#if AP_AHRS_DCM_ENABLED
-    case EKFType::DCM:
-        break;
-#endif
-#if AP_AHRS_SIM_ENABLED
-    case EKFType::SIM:
-        break;
-#endif
-
-#if AP_AHRS_EXTERNAL_ENABLED
-    case EKFType::EXTERNAL:
-        break;
-#endif
-        
-#if HAL_NAVEKF2_AVAILABLE
-    case EKFType::TWO:
-        ekf2.request_yaw_reset();
-        break;
-#endif
-
-#if HAL_NAVEKF3_AVAILABLE
-    case EKFType::THREE:
-        ekf3.request_yaw_reset();
-        break;
-#endif
-    }
-}
-
 #if AP_AHRS_EKF_RESET_ENABLED
 // request full backend reset, currently only implemented for EKF3
 // returns true if the reset was performed
@@ -2743,55 +2741,27 @@ void AP_AHRS::Log_Write()
 // check if non-compass sensor is providing yaw.  Allows compass pre-arm checks to be bypassed
 bool AP_AHRS::using_noncompass_for_yaw(void) const
 {
-    switch (active_EKF_type()) {
-#if HAL_NAVEKF2_AVAILABLE
-    case EKFType::TWO:
-        return ekf2.EKF2.isExtNavUsedForYaw();
-#endif
-#if AP_AHRS_DCM_ENABLED
-    case EKFType::DCM:
-#endif
-#if HAL_NAVEKF3_AVAILABLE
-    case EKFType::THREE:
-        return ekf3.EKF3.using_noncompass_for_yaw();
-#endif
-#if AP_AHRS_SIM_ENABLED
-    case EKFType::SIM:
-#endif
-#if AP_AHRS_EXTERNAL_ENABLED
-    case EKFType::EXTERNAL:
-#endif
-        return false; 
+#if AP_AHRS_DCM_ENABLED && HAL_NAVEKF3_AVAILABLE
+    // FIXME: DCM uses EKF3's answer (which is not necessarily the
+    // configured type)
+    if (active_estimates == &dcm_estimates) {
+        return ekf3_estimates.using_noncompass_for_yaw;
     }
-    // since there is no default case above, this is unreachable
-    return false;
+#endif
+    return active_estimates->using_noncompass_for_yaw;
 }
 
 // check if external nav is providing yaw
 bool AP_AHRS::using_extnav_for_yaw(void) const
 {
-    switch (active_EKF_type()) {
-#if HAL_NAVEKF2_AVAILABLE
-    case EKFType::TWO:
-        return ekf2.EKF2.isExtNavUsedForYaw();
-#endif
-#if AP_AHRS_DCM_ENABLED
-    case EKFType::DCM:
-#endif
-#if HAL_NAVEKF3_AVAILABLE
-    case EKFType::THREE:
-        return ekf3.EKF3.using_extnav_for_yaw();
-#endif
-#if AP_AHRS_SIM_ENABLED
-    case EKFType::SIM:
-#endif
-#if AP_AHRS_EXTERNAL_ENABLED
-    case EKFType::EXTERNAL:
-#endif
-        return false;
+#if AP_AHRS_DCM_ENABLED && HAL_NAVEKF3_AVAILABLE
+    // FIXME: DCM uses EKF3's answer (which is not necessarily the
+    // configured type)
+    if (active_estimates == &dcm_estimates) {
+        return ekf3_estimates.using_extnav_for_yaw;
     }
-    // since there is no default case above, this is unreachable
-    return false;
+#endif
+    return active_estimates->using_extnav_for_yaw;
 }
 
 // set and save the alt noise parameter value

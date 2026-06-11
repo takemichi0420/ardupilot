@@ -26,6 +26,7 @@
 #include <AP_InertialSensor/AP_InertialSensor.h>
 #include <AP_Common/Location.h>
 #include <AP_NavEKF/AP_NavEKF_Source.h>
+#include <AP_NavEKF/AP_Nav_Common.h>
 
 #define AP_AHRS_TRIM_LIMIT 10.0f        // maximum trim angle in degrees
 #define AP_AHRS_RP_P_MIN   0.05f        // minimum value for AHRS_RP_P parameter
@@ -153,6 +154,34 @@ public:
         // estimator.  Used to decide whether GPS will set the
         // navigation origin.
         bool configured_to_use_gps_for_pos_XY;
+
+        // if true, "external navigation" (as provided by MAVLink
+        // messages) is providing the yaw estimate.  e.g. a T265
+        // vision-position-estimate camera tracking yaw via image
+        // recognition
+        bool using_extnav_for_yaw;
+
+        // if true then however the yaw in these estimates was derived
+        // a compass was not involved:
+        bool using_noncompass_for_yaw;
+
+        /*
+         * filter status and estimates quality values:
+         */
+        nav_filter_status filter_status;
+        bool filter_status_valid;
+
+        // the innovations normalised using the innovation variance
+        // where a value of 0 indicates perfect consistency between
+        // the measurement and the EKF solution and a value of 1 is
+        // the maximum inconsistency that will be accepted by the
+        // filter:
+        float velVar, posVar, hgtVar, tasVar;
+        Vector3f magVar;
+        bool variances_valid;
+
+        float terrain_alt_variance;
+        bool terrain_alt_variance_valid;
 
     private:
         bool hagl_valid;
@@ -303,20 +332,6 @@ public:
     virtual bool get_innovations(Vector3f &velInnov, Vector3f &posInnov, Vector3f &magInnov, float &tasInnov, float &yawInnov) const {
         return false;
     }
-
-    virtual bool get_filter_status(union nav_filter_status &status) const {
-        return false;
-    }
-
-    // get_variances - provides the innovations normalised using the innovation variance where a value of 0
-    // indicates perfect consistency between the measurement and the EKF solution and a value of 1 is the maximum
-    // inconsistency that will be accepted by the filter
-    // boolean false is returned if variances are not available
-    virtual bool get_variances(float &velVar, float &posVar, float &hgtVar, Vector3f &magVar, float &tasVar) const {
-        return false;
-    }
-
-    virtual void send_ekf_status_report(class GCS_MAVLINK &link) const = 0;
 
     virtual void get_control_limits(float &ekfGndSpdLimit, float &controlScaleXY) const = 0;
 };

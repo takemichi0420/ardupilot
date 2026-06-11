@@ -195,6 +195,23 @@ void AP_AHRS_DCM::get_results(AP_AHRS_Backend::Estimates &results)
     // for this estimator.  Used to decide whether GPS will set
     // the navigation origin.
     results.configured_to_use_gps_for_pos_XY = _gps_use != GPSUse::Disable;
+
+    // are we consuming yaw from an external (e.g. vision-based) source?
+    // results.using_extnav_for_yaw = false;
+
+    // are we consuming yaw from a source which is *not* a compass
+    // results.using_noncompass_for_yaw = false;
+
+    /*
+     * filter status and estimates quality values:
+     */
+    // getFilterStatus(results.filter_status);
+    // results.filter_status_valid = false;
+
+    // provides the innovations normalised between 0 and 1:
+    // results.variances_valid = false;
+
+    // terrain_alt_variance_valid = false;
 }
 
 /*
@@ -1351,10 +1368,6 @@ bool AP_AHRS_DCM::get_relative_position_D_origin(postype_t &posD) const
     }
     posD = posNED.z;
     return true;
-}
-
-void AP_AHRS_DCM::send_ekf_status_report(GCS_MAVLINK &link) const
-{
 }
 
 // return true if DCM has a yaw source available
