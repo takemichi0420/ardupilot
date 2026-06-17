@@ -1,0 +1,15 @@
+# Public example. Copy this to diagnostic.hwdef and replace the values locally.
+# Do not commit diagnostic.hwdef because it can contain Wi-Fi credentials.
+#
+# Example build:
+#   ./waf configure --board esp32s3m5stampfly --extra-hwdef=libraries/AP_HAL_ESP32/hwdef/esp32s3m5stampfly/diagnostic.hwdef
+
+# Diagnostic build only. Do not use for flight.
+define HAL_ESP32_I2C_DIAGNOSTICS 1
+define HAL_BARO_ALLOW_INIT_NO_BARO
+
+# Join an iPhone Personal Hotspot instead of creating an ESP32 access point.
+define WIFI_STATION 1
+define WIFI_SSID_STATION "CHANGE_ME_IPHONE_HOTSPOT_NAME"
+define WIFI_PWD "CHANGE_ME_IPHONE_HOTSPOT_PASSWORD"
+define WIFI_HOSTNAME "ardupilot123"

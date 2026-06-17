@@ -1,0 +1,16 @@
+# Diagnostic build only. Do not use for flight.
+#
+# Build with:
+#   ./waf configure --board=esp32s3m5stampfly \
+#       --extra-hwdef=libraries/AP_HAL_ESP32/hwdef/esp32s3m5stampfly/diagnostic.hwdef
+#
+# This keeps the firmware running when the barometer probe fails so USB and
+# MAVLink logs can show the actual ESP-IDF I2C failure.
+define HAL_ESP32_I2C_DIAGNOSTICS 1
+define HAL_BARO_ALLOW_INIT_NO_BARO
+
+# Join the iPhone Personal Hotspot instead of creating an ESP32 access point.
+# Set the iPhone hotspot SSID and password to ardupilot123 / ardupilot123.
+define WIFI_STATION 1
+define WIFI_SSID_STATION "iPhone"
+define WIFI_HOSTNAME "ardupilot123"
