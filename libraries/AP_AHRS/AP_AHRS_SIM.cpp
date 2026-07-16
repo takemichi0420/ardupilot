@@ -35,53 +35,6 @@ bool AP_AHRS_SIM::airspeed_EAS(uint8_t index, float &airspeed_ret) const
     return airspeed_EAS(airspeed_ret);
 }
 
-bool AP_AHRS_SIM::get_relative_position_NED_origin(Vector3p &vec) const
-{
-    if (_sitl == nullptr) {
-        return false;
-    }
-
-    Location loc, orgn;
-    if (!get_location(loc) ||
-        !get_origin(orgn)) {
-        return false;
-    }
-
-    const Vector2p diff2d = orgn.get_distance_NE_postype(loc);
-    const struct SITL::sitl_fdm &fdm = _sitl->state;
-    vec = Vector3p(diff2d.x, diff2d.y,
-                   -(fdm.altitude - orgn.alt*0.01f));
-
-    return true;
-}
-
-bool AP_AHRS_SIM::get_relative_position_NE_origin(Vector2p &posNE) const
-{
-    Location loc, orgn;
-    if (!get_location(loc) ||
-        !get_origin(orgn)) {
-        return false;
-    }
-    posNE = orgn.get_distance_NE_postype(loc);
-
-    return true;
-}
-
-bool AP_AHRS_SIM::get_relative_position_D_origin(postype_t &posD) const
-{
-    if (_sitl == nullptr) {
-        return false;
-    }
-    const struct SITL::sitl_fdm &fdm = _sitl->state;
-    Location orgn;
-    if (!get_origin(orgn)) {
-        return false;
-    }
-    posD = -(fdm.altitude - orgn.alt*0.01f);
-
-    return true;
-}
-
 bool AP_AHRS_SIM::get_filter_status(nav_filter_status &status) const
 {
     memset(&status, 0, sizeof(status));
@@ -159,6 +112,11 @@ void AP_AHRS_SIM::get_results(AP_AHRS_Backend::Estimates &results)
     results.quaternion = fdm.quaternion;
     results.quaternion.rotate(-AP::ahrs().get_trim());
 
+    // Apply offsets
+    Quaternion offsets;
+    offsets.from_euler(Vector3f{_sitl->sim_ahrs_offset.roll, _sitl->sim_ahrs_offset.pitch, _sitl->sim_ahrs_offset.yaw} * radians(1));
+    results.quaternion *= offsets;
+
     // update derived attitude values:
     results.quaternion.rotation_matrix(results.dcm_matrix);
     results.quaternion.to_euler(results.roll_rad, results.pitch_rad, results.yaw_rad);
@@ -191,6 +149,23 @@ void AP_AHRS_SIM::get_results(AP_AHRS_Backend::Estimates &results)
      */
     results.location_valid = get_location(results.location);
 
+    // origin-relative functions
+    // results.provides_common_origin = false;
+
+    // origin-relative position:
+    {
+        Location orgn;
+        if (get_origin(orgn)) {
+            results.position_D = -(fdm.altitude - orgn.alt*0.01f);
+            results.position_D_valid = true;
+
+            if (results.location_valid) {
+                results.position_NE = orgn.get_distance_NE_postype(results.location);
+                results.position_NE_valid = true;
+            }
+        }
+    }
+
     results.hagl_valid = true;
     results.hagl = _sitl->state.altitude - AP::ahrs().get_home().alt*0.01f;
 
@@ -217,6 +192,15 @@ void AP_AHRS_SIM::get_results(AP_AHRS_Backend::Estimates &results)
     // are we consuming yaw from a source which is *not* a compass
     // (e.g. the GSF)
     // results.using_noncompass_for_yaw = false;
+
+#if AP_AHRS_GET_MAG_DATA_ENABLED
+    // estimators can provide their predicted magnetic fields:
+    // ... but SIM does not (and probably should!):
+    // results.mag_field_NED = {};
+    // results.mag_field_NED_valid = false;
+    // results.mag_field_corrections = {};
+    // results.mag_field_corrections_valid = false;
+#endif  // AP_AHRS_GET_MAG_DATA_ENABLED
 
     /*
      * filter status and estimates quality values:

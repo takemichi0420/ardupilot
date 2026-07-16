@@ -15,6 +15,7 @@ TARGET_HW_PX4_FMU_V6C                  56
 TARGET_HW_ARK_FMU_V6X                  57
 TARGET_HW_ARK_PI6X                     58
 TARGET_HW_ARK_FPV                      59
+TARGET_HW_ARK_FMU_V6S                  61
 TARGET_HW_MINDPX_V2                    88
 TARGET_HW_PX4_FLOW_V1                   6
 TARGET_HW_PX4_DISCOVERY_V1             99
@@ -64,6 +65,9 @@ Reserved "ARK [BL] FPV"                59
 Reserved "GUMSTIX [BL] FMU v6"         54
 Reserved "ARK CAN FLOW"                80
 Reserved "NXP ucans32k146"             34
+
+# IDs 110-119 reserved for Syro
+TARGET_HW_SYRO_V6X                     110
 
 # values from external vendors
 EXT_HW_RADIOLINK_MINI_PIX               3
@@ -355,11 +359,17 @@ AP_HW_PRINCIPIOT_H7PI                1248
 
 AP_HW_KT_FMU_F1                      1250
 
+AP_HW_GPILOT_P1						 1275
+
 AP_HW_SKYDROID-S3                    1300
+
 AP_HW_CBUnmanned-CM405-FC            1301
 AP_HW_CBU_H753-SOM                   1302
 
 AP_HW_KHA_ETH                        1315
+
+# IDs 1330-1339 reserved for Nyxtronics
+AP_HW_NYXTRONICS_NYX405V1            1330
 
 AP_HW_FlysparkF4                     1361
 
@@ -397,6 +407,8 @@ AP_HW_GEPRCF745BTHD                  1501
 AP_HW_GEPRC_TAKER_H743               1502
 AP_HW_StellarH7V2                    1503
 AP_HW_StellarF4V2                    1504
+
+AP_HW_BCUBEF745V2                    1511
 
 AP_HW_HGLRCF405V4                    1524
 
@@ -501,6 +513,8 @@ AP_HW_TBS_LUCID_PRO                  5251
 AP_HW_TBS_L431_PERIPH                5252
 AP_HW_TBS_LUCID_H7_WING              5253
 AP_HW_TBS_LUCID_H7_WING_AIO          5254
+AP_HW_TBS_LUCID_H7_OEM               5255
+AP_HW_TBS_LUCID_H7V3                 5256
 
 # IDs 5270-5279 reserved for SpeedyBee
 AP_HW_SpeedyBeeF405WINGV2            5270
@@ -595,7 +609,13 @@ AP_HW_VUAV-TinyV7                    7101
 AP_HW_AEROFOX_H7                     7110
 
 # IDs 7120-7129 reserved for Accton Godwit
-AP_HW_Accton_Godwit_GA1        7120
+AP_HW_Accton_Godwit_GA1              7120
+AP_HW_Accton_Godwit_GFF4             7121
+AP_HW_Accton_Godwit_GFH7             7122
+
+# IDs 7130-7139 reserved for CoreWing
+AP_HW_CoreWingF405WingV2             7130
+AP_HW_CoreWingF405WMiniV2            7131
 
 # please fill gaps in the above ranges rather than adding past ID #7199
 
@@ -605,6 +625,11 @@ AP_HW_CubeOrange_ODID               10140
 AP_HW_Pixhawk6_ODID                 10053
 AP_HW_CUAV_NORA_ODID                11009
 AP_HW_CUAV_X7_PRO_ODID              11010
+AP_HW_ZeroOne_X6_ODID               15600
+AP_HW_ZeroOne_X9_ODID               15601
+AP_HW_ZeroOne_M9_ODID               15610
+AP_HW_ZeroOne_A3_ODID               15620
+AP_HW_ZeroOne_A6i_ODID              15621
 AP_HW_CUAV-7-NANO_ODID              17000
 AP_HW_CUAV-V6X-V2_ODID              17001
 AP_HW_CUAV-X25-EVO_ODID             17002

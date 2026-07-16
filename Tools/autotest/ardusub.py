@@ -18,6 +18,7 @@ from pymavlink import mavutil
 
 import vehicle_test_suite
 
+from pysim import util
 from vehicle_test_suite import NotAchievedException
 
 # get location of scripts
@@ -82,7 +83,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         return os.path.realpath(__file__)
 
     def set_current_test_name(self, name):
-        self.current_test_name_directory = "ArduSub_Tests/" + name + "/"
+        self.current_test_name_directory = f"ArduSub_Tests/{name}/"
 
     def default_mode(self):
         return 'MANUAL'
@@ -145,16 +146,15 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         """
         tstart = self.get_sim_time_cached()
         previous_altitude = self.assert_receive_message('VFR_HUD').alt
-        self.progress('Altitude to be watched: %f' % (previous_altitude))
+        self.progress(f'Altitude to be watched: {previous_altitude}')
         while True:
             m = self.assert_receive_message('VFR_HUD')
             if self.get_sim_time_cached() - tstart > timeout:
-                self.progress('Altitude hold done: %f' % (previous_altitude))
+                self.progress(f'Altitude hold done: {previous_altitude}')
                 return
             if abs(m.alt - previous_altitude) > delta:
                 raise NotAchievedException(
-                    "Altitude not maintained: want %.2f (+/- %.2f) got=%.2f" %
-                    (previous_altitude, delta, m.alt))
+                    f"Altitude not maintained: want {previous_altitude:.2f} (+/- {delta:.2f}) got={m.alt:.2f}")
 
     def dive(self, alt, mode='MANUAL', timeout=120):
         """Dive to a target altitude."""
@@ -240,7 +240,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         found_failure = self.statustext_in_collections(failure_str)
 
         if found_failure is not None:
-            raise NotAchievedException("RngfndQuality test failed: " + found_failure.text)
+            raise NotAchievedException(f"RngfndQuality test failed: {found_failure.text}")
 
     def watch_distance_maintained(self, delta=0.3, timeout=5.0):
         """Watch and wait for the rangefinder reading to be maintained"""
@@ -249,22 +249,20 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         self.context_set_message_rate_hz('RANGEFINDER', self.sitl_streamrate())
         previous_distance = self.assert_receive_message('RANGEFINDER').distance
         previous_distance_ds = self.assert_receive_message('DISTANCE_SENSOR').current_distance * 0.01  # cm -> m
-        self.progress('Distance to be watched: %.2f' % previous_distance)
+        self.progress(f'Distance to be watched: {previous_distance:.2f}')
         while True:
             if self.get_sim_time_cached() - tstart > timeout:
-                self.progress('Distance hold done: %f' % previous_distance)
+                self.progress(f'Distance hold done: {previous_distance}')
                 self.context_pop()
                 return
             m = self.assert_receive_message('RANGEFINDER')
             if abs(m.distance - previous_distance) > delta:
                 raise NotAchievedException(
-                    "Distance not maintained: want %.2f (+/- %.2f) got=%.2f" %
-                    (previous_distance, delta, m.distance))
+                    f"Distance not maintained: want {previous_distance:.2f} (+/- {delta:.2f}) got={m.distance:.2f}")
             m = self.assert_receive_message('DISTANCE_SENSOR')
             if abs(m.current_distance*0.01 - previous_distance_ds) > delta:
                 raise NotAchievedException(
-                    "Distance not maintained: want %.2f (+/- %.2f) got=%.2f" %
-                    (previous_distance, delta, m.distance))
+                    f"Distance not maintained: want {previous_distance:.2f} (+/- {delta:.2f}) got={m.distance:.2f}")
 
     def GCSFailsafe(self):
         '''Test GCSFailsafe'''
@@ -371,7 +369,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
             return float(match.group(1))
 
         tstart = self.get_sim_time_cached()
-        self.progress('Distance to be watched: %.2f (+/- %.2f)' % (match_distance, delta))
+        self.progress(f'Distance to be watched: {match_distance:.2f} (+/- {delta:.2f})')
         max_delta = 0.0
 
         while True:
@@ -379,10 +377,10 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
             # If final_waypoint>0 then timeout is failure, otherwise success
             if timed_out and final_waypoint > 0:
                 raise NotAchievedException(
-                    "Mission not complete: want waypoint %i, only made it to waypoint %i" %
-                    (final_waypoint, self.mav.waypoint_current()))
+                    f"Mission not complete: want waypoint {final_waypoint}, "
+                    f"only made it to waypoint {self.mav.waypoint_current()}")
             if timed_out:
-                self.progress('Distance hold done. Max delta:%.2fm' % max_delta)
+                self.progress(f'Distance hold done. Max delta:{max_delta:.2f}m')
                 return
 
             true_distance = get_true_distance()
@@ -393,11 +391,11 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
                 max_delta = match_delta
             if match_delta > delta:
                 raise NotAchievedException(
-                    "Distance not maintained: want %.2f (+/- %.2f) got=%.2f (%.2f)" %
-                    (match_distance, delta, true_distance, match_delta))
+                    f"Distance not maintained: want {match_distance:.2f} (+/- {delta:.2f}) "
+                    f"got={true_distance:.2f} ({match_delta:.2f})")
             if final_waypoint > 0:
                 if self.mav.waypoint_current() >= final_waypoint:
-                    self.progress('Distance hold during mission done. Max delta:%.2fm' % max_delta)
+                    self.progress(f'Distance hold during mission done. Max delta:{max_delta:.2f}m')
                     return
 
     def SimTerrainSurftrak(self):
@@ -511,8 +509,8 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         final_altitude = self.assert_receive_message('VFR_HUD').alt
         if abs(previous_altitude - final_altitude) > delta:
             raise NotAchievedException(
-                "Changing modes affected depth with no throttle input!, started at {}, ended at {}"
-                .format(previous_altitude, final_altitude)
+                f"Changing modes affected depth with no throttle input!, "
+                f"started at {previous_altitude}, ended at {final_altitude}"
             )
 
     def PositionHold(self):
@@ -537,7 +535,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         self.delay_sim_time(10, reason="position hold measurement period")
         distance_m = self.get_distance(start_pos, self.mav.location())
         if distance_m > 1:
-            raise NotAchievedException("Position Hold was unable to keep position in calm waters within 1 meter after 10 seconds, drifted {} meters".format(distance_m))  # noqa
+            raise NotAchievedException(f"Position Hold was unable to keep position in calm waters within 1 meter after 10 seconds, drifted {distance_m} meters")  # noqa
 
         # Hold in 1 m/s current
         self.progress("Testing position hold in current")
@@ -546,7 +544,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         self.delay_sim_time(10, reason="drift measurement in 1m/s current")
         distance_m = self.get_distance(start_pos, self.mav.location())
         if distance_m > 1:
-            raise NotAchievedException("Position Hold was unable to keep position in 1m/s current within 1 meter after 10 seconds, drifted {} meters".format(distance_m))  # noqa
+            raise NotAchievedException(f"Position Hold was unable to keep position in 1m/s current within 1 meter after 10 seconds, drifted {distance_m} meters")  # noqa
 
         # Move forward slowly in 1 m/s current
         start_pos = self.mav.location()
@@ -556,7 +554,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         distance_m = self.get_distance(start_pos, self.mav.location())
         bearing = self.get_bearing(start_pos, self.mav.location())
         if distance_m < 2 or (bearing > 30 and bearing < 330):
-            raise NotAchievedException("Position Hold was unable to move north 2 meters, moved {} at {} degrees instead".format(distance_m, bearing))  # noqa
+            raise NotAchievedException(f"Position Hold was unable to move north 2 meters, moved {distance_m} at {bearing} degrees instead")  # noqa
         self.disarm_vehicle()
 
     def MotorThrustHoverParameterIgnore(self):
@@ -565,7 +563,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         # Test default parameter value
         mot_thst_hover_value = self.get_parameter("MOT_THST_HOVER")
         if mot_thst_hover_value != 0.5:
-            raise NotAchievedException("Unexpected default MOT_THST_HOVER parameter value {}".format(mot_thst_hover_value))
+            raise NotAchievedException(f"Unexpected default MOT_THST_HOVER parameter value {mot_thst_hover_value}")
 
         # Test if parameter is being ignored
         for value in [0.25, 0.75]:
@@ -606,12 +604,12 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         # Note this temperature matches the output of the Atmospheric Model for Air currently
         # And should be within 1 deg C of 40 degC
         if (m.temperature < 3900) or (4100 < m.temperature):
-            raise NotAchievedException("Did not get correct TSYS01 temperature: Got %f" % m.temperature)
+            raise NotAchievedException(f"Did not get correct TSYS01 temperature: Got {m.temperature}")
 
     def DiveMission(self):
         '''Dive mission'''
         filename = "sub_mission.txt"
-        self.progress("Executing mission %s" % filename)
+        self.progress(f"Executing mission {filename}")
         self.load_mission(filename)
         self.set_rc_default()
 
@@ -676,7 +674,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
                 raise NotAchievedException("Did not move far enough")
             pos = self.assert_receive_message('GLOBAL_POSITION_INT')
             delta = self.get_distance_int(startpos, pos)
-            self.progress("delta=%f (want >10)" % delta)
+            self.progress(f"delta={delta} (want >10)")
             if delta > 10:
                 break
         self.change_mode('MANUAL')
@@ -767,7 +765,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
             self.wait_heading(expected_yaw_deg)
         except NotAchievedException as e:
             raise NotAchievedException(
-                "Expected to get yaw consumed and at ATTITUDE (want %f got %f)" % (expected_yaw_deg, achieved_yaw_deg)
+                f"Expected to get yaw consumed and at ATTITUDE (want {expected_yaw_deg} got {achieved_yaw_deg})"
             ) from e
 
     def VisoForYaw(self):
@@ -878,16 +876,15 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         self.assert_parameter_value('RNGFND1_MAX', 30)
 
         filename = "terrain_mission.txt"
-        self.progress("Executing mission %s" % filename)
+        self.progress(f"Executing mission {filename}")
         self.load_mission(filename)
         self.set_rc_default()
         self.arm_vehicle()
         self.change_mode('AUTO')
         self.wait_waypoint(1, 4, max_dist_to_final_wp_m=5)
-        self.delay_sim_time(3, reason="final waypoint to settle")
 
         # Expect sub to hover at final altitude
-        self.assert_altitude(-36.0)
+        self.wait_altitude(altitude_min=-37, altitude_max=-35, relative=False, minimum_duration=2, timeout=30)
 
         self.disarm_vehicle()
         self.progress("Mission OK")
@@ -910,14 +907,14 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         start = self.get_sim_time()
         self.wait_ekf_happy_const_pos(timeout=timeout)
         armable_time = self.get_sim_time() - start
-        self.progress("Took %u seconds to become armable" % armable_time)
+        self.progress(f"Took {armable_time} seconds to become armable")
         self.total_waiting_to_arm_time += armable_time
         self.waiting_to_arm_count += 1
 
     def collected_msgs(self, msg_type):
         c = self.context_get()
         if msg_type not in c.collections:
-            raise NotAchievedException("Not collecting (%s)" % str(msg_type))
+            raise NotAchievedException(f"Not collecting ({msg_type})")
         return c.collections[msg_type]
 
     def SetGlobalOrigin(self):
@@ -945,7 +942,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
 
         num_mavlink_origin_msgs = len(self.collected_msgs('GPS_GLOBAL_ORIGIN'))
         if num_mavlink_origin_msgs != 1:
-            raise NotAchievedException("Expected 1 GPS_GLOBAL_ORIGIN message, found %d" % num_mavlink_origin_msgs)
+            raise NotAchievedException(f"Expected 1 GPS_GLOBAL_ORIGIN message, found {num_mavlink_origin_msgs}")
 
     def BackupOrigin(self):
         """Test AHRS_ORIGIN_LAT and AHRS_ORIGIN_LON parameters"""
@@ -971,7 +968,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
 
     def assert_mag_fusion_selection(self, expect_sel):
         """Get the most recent XKFS message and check the MAG_FUSION value"""
-        self.progress("Expect mag fusion selection %d" % expect_sel)
+        self.progress(f"Expect mag fusion selection {expect_sel}")
         mlog = self.dfreader_for_current_onboard_log()
         found_sel = MagFuseSel.NOT_FUSING
         while True:
@@ -980,7 +977,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
                 break
             found_sel = m.MAG_FUSION
         if found_sel != expect_sel:
-            raise NotAchievedException("Expected mag fusion selection %d, found %d" % (expect_sel, found_sel))
+            raise NotAchievedException(f"Expected mag fusion selection {expect_sel}, found {found_sel}")
 
     def FuseMag(self):
         """Test EK3_MAG_CAL values"""
@@ -1080,12 +1077,12 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
             dcurr = self.get_distance(lstart, self.mav.location())
 
             if dcurr - dmax < -0.2:
-                raise NotAchievedException("Bounced back from %.2fm to %.2fm" % (dmax, dcurr))
+                raise NotAchievedException(f"Bounced back from {dmax:.2f}m to {dcurr:.2f}m")
             if dcurr > dmax:
                 dmax = dcurr
 
             if abs(dcurr - dprev) < 0.1:
-                self.progress("Stopping distance %.2fm, less than %.2fs" % (dcurr, self.get_sim_time_cached() - tstart))
+                self.progress(f"Stopping distance {dcurr:.2f}m, less than {self.get_sim_time_cached() - tstart:.2f}s")
                 return
 
             if self.get_sim_time_cached() - tstart > 10:
@@ -1113,7 +1110,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
 
             # try different stick values, resulting speed is ~ max_speed * effort * gain
             for pwm in range(1700, 1901, 100):
-                self.progress('PILOT_SPEED %d, forward pwm %d' % (pilot_speed, pwm))
+                self.progress(f'PILOT_SPEED {pilot_speed}, forward pwm {pwm}')
                 self.set_rc(Joystick.Forward, pwm)
                 self.delay_sim_time(3, reason="forward movement")
                 self.set_rc(Joystick.Forward, 1500)
@@ -1349,6 +1346,267 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
 
         self.disarm_vehicle()
 
+    def GuidedWP(self):
+        """Test Guided_WP mode"""
+
+        pos_mode = (mavutil.mavlink.POSITION_TARGET_TYPEMASK_VX_IGNORE |
+                    mavutil.mavlink.POSITION_TARGET_TYPEMASK_VY_IGNORE |
+                    mavutil.mavlink.POSITION_TARGET_TYPEMASK_VZ_IGNORE |
+                    mavutil.mavlink.POSITION_TARGET_TYPEMASK_AX_IGNORE |
+                    mavutil.mavlink.POSITION_TARGET_TYPEMASK_AY_IGNORE |
+                    mavutil.mavlink.POSITION_TARGET_TYPEMASK_AZ_IGNORE |
+                    mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_IGNORE |
+                    mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE)
+
+        seafloor_depth = 50
+        speed = 0.5
+
+        # Load the synthetic seafloor, this will push a context and reboot
+        self.prepare_synthetic_seafloor_test(seafloor_depth, 10)  # rf_target is not used
+
+        self.set_parameter('WP_SPD', speed)
+
+        self.dive(-15)
+
+        # GLOBAL_POSITION_INT will be our clock
+        self.context_set_message_rate_hz('GLOBAL_POSITION_INT', 10)
+
+        # Run back and forth between 2 locations
+        distance = 30
+        timeout = distance / speed + 20  # Add time to accelerate and decelerate
+
+        runs = [{
+            # Hold depth as the terrain rises
+            'frame': mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            'bearing': 180,
+            'target_alt': -15,  # Altitude above origin
+            'max_error_allowed': 1.0,
+        }, {
+            # Hold range as the terrain falls
+            'frame': mavutil.mavlink.MAV_FRAME_GLOBAL_TERRAIN_ALT,
+            'bearing': 0,
+            'target_alt': 25,  # Distance to seafloor
+            'max_error_allowed': 1.0,
+        }]
+
+        # Stay in GUIDED mode for the duration
+        self.change_mode('GUIDED')
+
+        for run in runs:
+            msg = self.assert_receive_message('GLOBAL_POSITION_INT')
+            start_loc = (msg.lat * 1e-7, msg.lon * 1e-7)
+            dest_loc = util.gps_newpos(start_loc[0], start_loc[1], run['bearing'], distance)
+
+            # current_alt = range (distance to seafloor) or altitude (distance above origin), depending on the frame
+            current_alt = None
+            max_error = 0.0
+
+            # Set the target
+            self.mav.mav.set_position_target_global_int_send(
+                0, 1, 1, run['frame'], pos_mode,
+                int(dest_loc[0] * 1e7), int(dest_loc[1] * 1e7), run['target_alt'],
+                0, 0, 0, 0, 0, 0, 0, 0)
+
+            start_time = self.get_sim_time()
+            while True:
+                msg = self.assert_receive_message(['GLOBAL_POSITION_INT', 'STATUSTEXT'])
+                # Get ground truth (sans noise) from the terrain generator
+                if msg.get_type() == 'STATUSTEXT':
+                    if run['frame'] == mavutil.mavlink.MAV_FRAME_GLOBAL_TERRAIN_ALT:
+                        match = RE_TR_SEARCH.search(msg.text)
+                        if match:
+                            current_alt = float(match.group(1))
+                    continue
+
+                current_loc = (msg.lat * 1e-7, msg.lon * 1e-7)
+                distance_remaining = util.gps_distance(
+                    dest_loc[0], dest_loc[1],
+                    current_loc[0], current_loc[1])
+
+                if run['frame'] == mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT:
+                    current_alt = msg.relative_alt * 0.001
+
+                if distance_remaining < 0.5:
+                    self.progress(f'Frame {run["frame"]} reached destination at time '
+                                  f'{self.get_sim_time_cached() - start_time}, max_error {max_error}')
+                    break
+                elif self.get_sim_time_cached() - start_time > timeout:
+                    raise NotAchievedException(f'Frame {run["frame"]} took too long to reach the destination')
+
+                if current_alt is None:
+                    continue
+
+                alt_error = abs(current_alt - run['target_alt'])
+                if alt_error > run['max_error_allowed']:
+                    raise NotAchievedException(
+                        f'Alt incorrect on frame {run["frame"]}: want {run["target_alt"]:.2f} '
+                        f'(+/- {run["max_error_allowed"]:.2f}) got={current_alt:.2f}')
+
+                if alt_error > max_error:
+                    max_error = alt_error
+        self.disarm_vehicle()
+
+    def IgnoreGPSDrift(self):
+        """ Test GPS-DVL integration. DVL (VISO) should be able to filter the GPS noise.
+        this tests switching over to VISO, running for a bit with no sensors, re-enabling viso,
+        and finally surfacing, where we expect the GPS position will be used to fix the drift
+        resulting of running with no positioning sensors."""
+
+        self.customise_SITL_commandline(["--serial5=sim:vicon:"])
+
+        # configure EKF to use external nav instead of GPS
+        self.set_parameters({
+            "EK3_SRC1_POSXY": 3,
+            "EK3_SRC1_VELXY": 6,
+            "EK3_SRC1_POSZ": 1,
+            "EK3_SRC1_VELZ": 0,
+
+            "VISO_TYPE": 1,
+            "SERIAL5_PROTOCOL": 1,
+            "SIM_VICON_TMASK": 8,  # send VISION_POSITION_DELTA
+            # "SIM_VICON_TMASK": 2,  # send VISION_SPEED_ESTIMATE
+            # "SIM_VICON_TMASK": 10,  # send VISION_SPEED_ESTIMATE AND VISION_POSITION_DELTA
+            # "EK3_VELNE_M_NSE": 0.001,
+
+            "GPS1_TYPE": 1,
+            "SIM_GPS1_DRFTALT": 3,
+            "SIM_GPS1_ACC": 0.3,
+            "SIM_GPS1_ENABLE": 1,
+            "SIM_GPS1_TYPE": 1,
+
+            "GPS2_TYPE": 0,
+
+            "EK3_POSNE_M_NSE": 100,
+        })
+        self.reboot_sitl()
+
+        self.wait_ready_to_arm()
+        self.arm_vehicle()
+        self.progress("Ensuring that VISO manages to filter the GPS noise")
+        self.change_mode('POSHOLD')
+        self.set_parameter("SIM_GPS1_HNSE", 2)
+        self.wait_location(
+            self.sim_location(),
+            location_source="SIMSTATE",
+            minimum_duration=10,
+            height_accuracy=10.0,
+            accuracy=1.0,
+            timeout=60.0,
+        )
+
+        self.progress("Diving to 10m")
+        self.set_rc(Joystick.Throttle, 1300)
+        self.wait_altitude(altitude_min=-10, altitude_max=-9, relative=False, timeout=60)
+        self.set_rc(Joystick.Throttle, 1500)
+
+        self.progress("Disabling GPS")
+        self.set_parameters({
+            "SIM_GPS1_ENABLE": 0,
+        })
+
+        self.progress("Driving GPS-less for 10m using VISO")
+        self.set_rc(Joystick.Forward, 1900)
+        self.wait_distance(10, timeout=60, location_source="SIMSTATE")
+        self.set_rc(Joystick.Forward, 1500)
+
+        self.progress("Surfacing")
+        self.set_rc(Joystick.Throttle, 1900)
+        self.wait_altitude(altitude_min=-0.5, altitude_max=1, relative=False, timeout=60)
+        self.set_rc(Joystick.Throttle, 1500)
+
+        self.progress("Re-enabling GPS, expecting position to converge within 2m")
+        self.set_parameters({
+            "SIM_GPS1_ENABLE": 1,
+        })
+        self.wait_location(self.mav.location(), minimum_duration=5, accuracy=2, timeout=60.0)
+
+        self.progress("Driving forward 10m with GPS+VISO")
+        self.set_rc(Joystick.Forward, 1900)
+        self.wait_distance(10, timeout=60, location_source="SIMSTATE")
+        self.set_rc(Joystick.Forward, 1500)
+
+        self.progress("Disabling GPS and diving to 10m for no-GPS+no-VISO test")
+        self.set_parameters({
+            "SIM_GPS1_ENABLE": 0,
+        })
+        self.set_rc(Joystick.Throttle, 1300)
+        self.wait_altitude(altitude_min=-10, altitude_max=-9, relative=False, timeout=60)
+        self.set_rc(Joystick.Throttle, 1500)
+
+        self.progress("Driving 10m on VISO only, verifying EKF has relative position")
+        self.set_rc(Joystick.Forward, 1900)
+        self.wait_distance(10, timeout=60, location_source="SIMSTATE")
+        self.wait_ekf_flags(
+            mavutil.mavlink.ESTIMATOR_POS_HORIZ_REL,
+            0,
+            timeout=15,
+        )
+
+        self.progress("Disabling VISO and waiting for EKF to lose position")
+        self.set_parameters({
+            "SIM_VICON_TMASK": 0,
+        })
+        self.wait_ekf_flags(
+            0,
+            mavutil.mavlink.ESTIMATOR_POS_HORIZ_REL | mavutil.mavlink.ESTIMATOR_POS_HORIZ_ABS,
+            timeout=15,
+        )
+
+        self.progress("Stopping to build position error while EKF has no aiding")
+        self.set_rc(Joystick.Forward, 1500)
+        self.delay_sim_time(10, reason="build position error while EKF has no aiding")
+
+        self.progress("Re-enabling VISO and driving forward")
+        self.set_rc(Joystick.Forward, 1900)
+        self.delay_sim_time(5, reason="drive forward with no aiding")
+        self.set_parameters({
+            "SIM_VICON_TMASK": 10,
+        })
+        self.delay_sim_time(10, reason="drive forward with VISO aiding")
+        self.set_rc(Joystick.Forward, 1500)
+
+        self.progress("Surfacing to simulate re-acquiring GPS")
+        self.set_rc(Joystick.Throttle, 1900)
+        self.wait_altitude(altitude_min=-0.5, altitude_max=1, relative=False, timeout=60)
+        self.set_rc(Joystick.Throttle, 1500)
+
+        self.progress("Re-enabling GPS, expecting position correction")
+        self.set_parameters({
+            "SIM_GPS1_ENABLE": 1,
+        })
+        self.wait_distance(10, accuracy=5, timeout=60)
+        self.disarm_vehicle()
+
+    def AutoTerrainRecover(self):
+        """Test Auto_TerrainRecover"""
+        self.set_parameter('RNGFND1_MAX', 50)
+
+        # Start at (0, 0, -5)
+        self.dive(-5, mode='ALT_HOLD')
+
+        # Move to (50, 0, 20) in above-terrain frame
+        self.upload_simple_relhome_mission([
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 50, 0, 20, {
+                "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_TERRAIN_ALT,
+            }),
+        ])
+
+        self.change_mode('AUTO')
+        self.delay_sim_time(10, reason="Wait for mission to start")
+
+        # Reduce rangefinder range to trigger failsafe recovery
+        self.context_collect('STATUSTEXT')
+        self.set_parameter("RNGFND1_MAX", 35)
+        self.wait_statustext("Attempting auto failsafe recovery")
+
+        # The vehicle will dive until it recovers
+        self.wait_statustext("Terrain failsafe recovery successful!")
+
+        # Reduce it again, this time recovery will time out, and the vehicle will automatically disarm
+        self.set_parameter("RNGFND1_MAX", 15)
+        self.wait_statustext("Terrain failsafe recovery timeout!")
+        self.wait_statustext("Disarming motors")
+
     def tests(self):
         '''return list of all tests'''
         ret = super(AutoTestSub, self).tests()
@@ -1393,6 +1651,9 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
             self.UTMGlobalPosition,
             self.UTMGlobalPositionWaypoint,
             self.UpsideDown,
+            self.GuidedWP,
+            self.AutoTerrainRecover,
+            self.IgnoreGPSDrift,
         ])
 
         return ret

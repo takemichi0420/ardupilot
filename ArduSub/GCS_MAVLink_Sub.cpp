@@ -97,6 +97,28 @@ void GCS_MAVLINK_Sub::send_nav_controller_output() const
 // would head in an autonomous mode
 bool GCS_MAVLINK_Sub::get_target_location(Location &loc) const
 {
+    // in Guided mode, only Guided_WP uses wp_nav; the other submodes keep
+    // their own targets. Guided_WP breaks out to the wp_nav return below.
+    if (sub.flightmode->in_guided_mode()) {
+        switch (sub.guided_mode) {
+        case Guided_WP:
+            break;
+        case Guided_PosVel: {
+            Vector3f pos_neu_cm;
+            if (!sub.mode_guided.get_posvel_target_NEU_cm(pos_neu_cm)) {
+                return false;
+            }
+            loc = Location(pos_neu_cm, Location::AltFrame::ABOVE_ORIGIN);
+            return true;
+        }
+        case Guided_Velocity:
+        case Guided_Angle:
+            // no fixed position target to report
+            return false;
+        }
+    }
+
+    // for non-guided modes (Auto, etc.) fall back to wp_nav as before
     return sub.wp_nav.is_active() && sub.wp_nav.get_wp_destination_loc(loc);
 }
 
@@ -706,8 +728,7 @@ void GCS_MAVLINK_Sub::handle_message(const mavlink_message_t &msg)
             break;
         }
 
-        Vector3f pos_neu_cm;  // position (North, East, Up coordinates) in centimeters
-
+        Location loc;
         if (!pos_ignore) {
             // sanity check location
             if (!check_latlng(packet.lat_int, packet.lon_int)) {
@@ -718,23 +739,24 @@ void GCS_MAVLINK_Sub::handle_message(const mavlink_message_t &msg)
                 // unknown coordinate frame
                 break;
             }
-            const Location loc{
+            loc = {
                 packet.lat_int,
                 packet.lon_int,
                 int32_t(packet.alt*100),
                 frame,
             };
-            if (!loc.get_vector_from_origin_NEU_cm(pos_neu_cm)) {
-                break;
-            }
         }
 
         if (!pos_ignore && !vel_ignore && acc_ignore) {
+            Vector3f pos_neu_cm;
+            if (!loc.get_vector_from_origin_NEU_cm(pos_neu_cm)) {
+                break;
+            }
             sub.mode_guided.guided_set_destination_posvel(pos_neu_cm, Vector3f(packet.vx * 100.0f, packet.vy * 100.0f, -packet.vz * 100.0f));
         } else if (pos_ignore && !vel_ignore && acc_ignore) {
             sub.mode_guided.guided_set_velocity(Vector3f(packet.vx * 100.0f, packet.vy * 100.0f, -packet.vz * 100.0f));
         } else if (!pos_ignore && vel_ignore && acc_ignore) {
-            sub.mode_guided.guided_set_destination(pos_neu_cm);
+            sub.mode_guided.guided_set_destination(loc);
         }
 
         break;

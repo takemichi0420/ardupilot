@@ -5,10 +5,72 @@
 #include "AP_AHRS_NavEKF3.h"
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_HAL/AP_HAL.h>
+#include <AP_Logger/AP_Logger.h>
+#include <GCS_MAVLink/GCS.h>
 
 extern const AP_HAL::HAL& hal;
 
 NavEKF3 AP_AHRS_NavEKF3::EKF3;
+
+bool AP_AHRS_NavEKF3::start()
+{
+    const auto now_ms = AP_HAL::millis();
+
+    if (start_time_ms == 0) {
+        start_time_ms = now_ms;
+    }
+
+#if HAL_LOGGING_ENABLED
+    // if we're doing Replay logging then don't allow any data
+    // into the EKF yet.  Don't allow it to block us for long.
+    if (!hal.util->was_watchdog_reset()) {
+        if (now_ms - start_time_ms < 5000) {
+            if (!AP::logger().allow_start_ekf()) {
+                return false;
+            }
+        }
+    }
+#endif
+
+    // wait 1 second for DCM to output a valid tilt error estimate
+    // FIXME: work out whether this is still required!
+    if (now_ms - start_time_ms <= 1000) {
+        return false;
+    }
+
+    // try to start the filter:
+    return EKF3.InitialiseFilter();
+}
+
+void AP_AHRS_NavEKF3::update()
+{
+    if (!started) {
+        started = start();
+    }
+    if (!started) {
+        return;
+    }
+    EKF3.UpdateFilter();
+
+    // check the current primary core; if it has changed then assume
+    // our attitude is reset:
+    const int8_t primary_core = EKF3.getPrimaryCoreIndex();
+    if (old_primary_core != primary_core) {
+        old_primary_core = primary_core;
+        attitude_reset_count++;
+        LOGGER_WRITE_ERROR(LogErrorSubsystem::EKF_PRIMARY, LogErrorCode(primary_core));
+        GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "EKF3 primary changed:%d", (unsigned)primary_core);
+    }
+
+    float yaw_delta;
+    yaw_reset_tracker.update(EKF3.getLastYawResetAngle(yaw_delta), yaw_delta);
+
+    Vector2f pos_ne_delta;
+    position_NE_reset_tracker.update(EKF3.getLastPosNorthEastReset(pos_ne_delta), pos_ne_delta);
+
+    float pos_d_delta;
+    position_D_reset_tracker.update(EKF3.getLastPosDownReset(pos_d_delta), pos_d_delta);
+}
 
 void AP_AHRS_NavEKF3::get_results(AP_AHRS_Backend::Estimates &results)
 {
@@ -59,6 +121,11 @@ void AP_AHRS_NavEKF3::get_results(AP_AHRS_Backend::Estimates &results)
 
     results.attitude_valid = started;
 
+    results.attitude_reset_count = attitude_reset_count;
+
+    // copy results from the yaw reset tracker into results:
+    yaw_reset_tracker.get(results.yaw_reset_count, results.yaw_reset_delta);
+
     /*
      * acceleration estimates
      */
@@ -98,6 +165,18 @@ void AP_AHRS_NavEKF3::get_results(AP_AHRS_Backend::Estimates &results)
      */
     results.location_valid = EKF3.getLLH(results.location);
 
+    // origin-relative functions
+    results.provides_common_origin = true;
+
+    // origin-relative position:
+    results.position_NE_valid = EKF3.getPosNE(results.position_NE);
+    // copy results from the position_NE reset tracker into results:
+    position_NE_reset_tracker.get(results.position_NE_reset_count, results.position_NE_reset_delta);
+
+    results.position_D_valid = EKF3.getPosD(results.position_D);
+    // copy results from the position_D reset tracker into results:
+    position_D_reset_tracker.get(results.position_D_reset_count, results.position_D_reset_delta);
+
     results.hagl_valid = EKF3.getHAGL(results.hagl);
 
     /*
@@ -114,7 +193,7 @@ void AP_AHRS_NavEKF3::get_results(AP_AHRS_Backend::Estimates &results)
     // true if GPS is configured as the horizontal position source
     // for this estimator.  Used to decide whether GPS will set
     // the navigation origin:
-    results.configured_to_use_gps_for_pos_XY = EKF3.configuredToUseGPSForPos();
+    results.configured_to_use_gps_for_pos_XY = EKF3.configuredToUseGPSForPosXY();
 
     // are we consuming yaw from an external (e.g. vision-based) source?
     results.using_extnav_for_yaw = EKF3.using_extnav_for_yaw();
@@ -123,11 +202,21 @@ void AP_AHRS_NavEKF3::get_results(AP_AHRS_Backend::Estimates &results)
     // (e.g. the GSF)
     results.using_noncompass_for_yaw = EKF3.using_noncompass_for_yaw();
 
+#if AP_AHRS_GET_MAG_DATA_ENABLED
+    // estimators can provide their predicted magnetic fields:
+    EKF3.getMagNED(results.mag_field_NED);
+    results.mag_field_NED_valid = true;
+    EKF3.getMagXYZ(results.mag_field_corrections);
+    results.mag_field_corrections_valid = true;
+#endif  // AP_AHRS_GET_MAG_DATA_ENABLED
+
     /*
      * filter status and estimates quality values:
      */
     EKF3.getFilterStatus(results.filter_status);
     results.filter_status_valid = true;
+
+    EKF3.getFilterFaults(results.filter_faults);
 
     // provides the innovations normalised between 0 and 1:
     Vector2f offset;

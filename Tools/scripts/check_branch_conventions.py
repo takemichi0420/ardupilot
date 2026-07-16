@@ -9,8 +9,8 @@ Validates:
   - commit messages have a well-formed subsystem prefix before ':'
   - commit subject lines are <= 160 characters
   - changed markdown files pass markdownlint-cli2
-  - new hwdef board directories include a README.md
-  - new hwdef board READMEs contain at least one local image added in the PR
+
+(new hwdef board README/image requirements are validated by test_new_boards.py)
 
 AP_FLAKE8_CLEAN
 '''
@@ -27,6 +27,7 @@ import sys
 import urllib.error
 import urllib.request
 
+import allowed_subsystems
 import build_script_base
 
 DOCS_URL = "https://ardupilot.org/dev/docs/submitting-patches-back-to-master.html"
@@ -106,23 +107,83 @@ class CheckBranchConventions(build_script_base.BuildScriptBase):
             # strip leading hash from --oneline format
             subject = line.split(" ", 1)[1] if " " in line else line
             if ":" not in subject:
-                print(f"{FAIL} Missing subsystem prefix: {line}")
+                print(f"{FAIL} Commit is missing subsystem prefix: {line}")
                 print(f"       Reword to e.g. 'AP_Compass: {subject}'")
                 print(f"       See: {DOCS_URL}")
                 ok = False
                 continue
             prefix = subject.split(":")[0]
             if prefix.strip().upper() in BLACKLISTED_PREFIXES:
-                print(f"{FAIL} Bad subsystem prefix '{prefix}': {line}")
+                print(f"{FAIL} Commit has bad subsystem prefix '{prefix}': {line}")
                 print(f"       See: {DOCS_URL}")
                 ok = False
             if not PREFIX_RE.match(prefix):
-                print(f"{FAIL} Malformed subsystem prefix '{prefix}': {line}")
+                print(f"{FAIL} Commit has malformed subsystem prefix '{prefix}': {line}")
                 print("       Prefix must contain only letters, digits, '.', '_', '/', '-', spaces, quotes.")
                 print(f"       See: {DOCS_URL}")
                 ok = False
         if ok:
             print(f"{PASS} All commit messages have well-formed subsystem tags.")
+        return ok
+
+    def check_commit_subsystems(self) -> bool:
+        '''Verify that every commit touches a single, allowed subsystem:
+           - the declared prefix is in the allowed-subsystem list, and
+           - every file changed in the commit belongs to that subsystem.
+        '''
+        repo_root = self.run_git(
+            ['rev-parse', '--show-toplevel'], show_output=False,
+        ).strip()
+        subsystems = allowed_subsystems.AllowedSubsystems(repo_root)
+        commits_raw = self.run_git(
+            ['log', f'{self.base_branch}..HEAD', '--reverse',
+             '--pretty=format:%H %s'],
+            show_output=False,
+        ).strip()
+
+        ok = True
+        for line in commits_raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            sha, _, subject = line.partition(' ')
+            # revert and fixup commits are handled by other checks; their
+            # prefixes legitimately don't name a single subsystem.
+            if subject.startswith('Revert "') or 'fixup!' in subject:
+                continue
+            if ':' not in subject:
+                # missing prefix is reported by check_commit_messages
+                continue
+            prefix = subject.split(':', 1)[0].strip()
+
+            created = self.created_library_dirs(sha)
+            allowed = subsystems.allowed_subsystems(created)
+
+            if prefix not in allowed:
+                suggestion = subsystems.suggest_subsystem(prefix, allowed)
+                hint = f" (did you mean '{suggestion}'?)" if suggestion else ""
+                print(f"{FAIL} {sha[:12]} unknown subsystem prefix "
+                      f"'{prefix}'{hint}: {subject}")
+                print("       Not in the allowed list; see "
+                      "Tools/scripts/allowed_subsystems.py.")
+                ok = False
+                continue
+
+            for path in self.get_changed_paths_for_commit(sha):
+                candidates = subsystems.subsystems_for_path(path)
+                if not candidates:
+                    print(f"{FAIL} {sha[:12]} {path} maps to no known "
+                          f"subsystem.")
+                    print("       Add a rule to "
+                          "Tools/scripts/allowed_subsystems.py.")
+                    ok = False
+                elif prefix not in candidates:
+                    print(f"{FAIL} {sha[:12]} {path} is not part of subsystem "
+                          f"'{prefix}'; it belongs to: {', '.join(candidates)}")
+                    ok = False
+
+        if ok:
+            print(f"{PASS} All commits touch a single allowed subsystem.")
         return ok
 
     def check_commit_lengths(self, commits: str) -> bool:
@@ -559,126 +620,10 @@ class CheckBranchConventions(build_script_base.BuildScriptBase):
 
         return all_board_ids_are_valid
 
-    def check_new_board_has_readme(self) -> bool:
-        '''Every new hwdef board directory must include a README.md.'''
-
-        added_raw = self.run_git(
-            ["diff", "--name-only", "--diff-filter=A",
-             f"{self.base_branch}...HEAD"],
-            show_output=False,
-        ).strip()
-        added_files = set(added_raw.splitlines()) if added_raw else set()
-
-        hwdef_prefix = "libraries/AP_HAL_ChibiOS/hwdef/"
-        # Board dirs that have at least one newly added file at depth 1 under hwdef/
-        candidate_boards = {
-            f.split("/")[3]
-            for f in added_files
-            if f.startswith(hwdef_prefix) and f.count("/") == 4
-        }
-
-        if not candidate_boards:
-            print(f"{PASS} No new hwdef board directories added.")
-            return True
-
-        # Determine which of those dirs are genuinely new (absent in base branch)
-        existing_raw = self.run_git(
-            ["ls-tree", "--name-only", self.base_branch,
-             hwdef_prefix],
-            show_output=False,
-        ).strip()
-        existing_boards = {
-            os.path.basename(p)
-            for p in existing_raw.splitlines()
-            if p.strip()
-        }
-
-        new_boards = sorted(candidate_boards - existing_boards)
-        if not new_boards:
-            print(f"{PASS} No new hwdef board directories added.")
-            return True
-
-        ok = True
-        for board_name in new_boards:
-            board_prefix = f"{hwdef_prefix}{board_name}/"
-            has_readme = any(
-                os.path.basename(f) == "README.md"
-                for f in added_files
-                if f.startswith(board_prefix)
-            )
-            if has_readme:
-                print(f"{PASS} {board_name}: README.md present.")
-            else:
-                print(f"{FAIL} {board_name}: new board directory has no README.md.")
-                ok = False
-
-        return ok
-
-    def check_new_board_images(self) -> bool:
-        '''For each newly added hwdef board README, verify it contains at least one
-        local image reference that is also a newly added file in the PR.'''
-
-        # All files added (not modified) in this PR
-        added_raw = self.run_git(
-            ["diff", "--name-only", "--diff-filter=A",
-             f"{self.base_branch}...HEAD"],
-            show_output=False,
-        ).strip()
-        added_files = set(added_raw.splitlines()) if added_raw else set()
-
-        hwdef_prefix = "libraries/AP_HAL_ChibiOS/hwdef/"
-        # New READMEs exactly one directory level under hwdef/
-        # e.g. libraries/AP_HAL_ChibiOS/hwdef/NewBoard/README.md → 4 slashes
-        new_readmes = sorted(
-            f for f in added_files
-            if f.startswith(hwdef_prefix)
-            and os.path.basename(f) == "README.md"
-            and f.count("/") == 4
-        )
-
-        if not new_readmes:
-            print(f"{PASS} No new hwdef board READMEs added.")
-            return True
-
-        img_md_re = re.compile(r'!\[[^\]]*\]\(([^)#?\s]+)')
-
-        ok = True
-        for readme_path in new_readmes:
-            board_name = readme_path.split("/")[3]
-
-            if not os.path.exists(readme_path):
-                print(f"{SKIP} {board_name}: README not present locally, skipping image check.")
-                continue
-
-            with open(readme_path, encoding="utf-8", errors="replace") as fh:
-                content = fh.read()
-
-            readme_dir = os.path.dirname(readme_path)
-            local_refs = []
-            for m in img_md_re.finditer(content):
-                src = m.group(1).strip()
-                if not src.startswith(("http://", "https://", "//")):
-                    local_refs.append(src)
-
-            if not local_refs:
-                print(f"{FAIL} {board_name}: README.md contains no local image references.")
-                ok = False
-                continue
-
-            found = any(
-                os.path.normpath(os.path.join(readme_dir, src)) in added_files
-                for src in local_refs
-            )
-            if found:
-                print(f"{PASS} {board_name}: README.md includes at least one image added in this PR.")
-            else:
-                print(f"{FAIL} {board_name}: README.md has no local images added in this PR.")
-                for src in local_refs:
-                    resolved = os.path.normpath(os.path.join(readme_dir, src))
-                    print(f"         {src!r} → {resolved}")
-                ok = False
-
-        return ok
+    # NOTE: checks concerning new hwdef boards (README.md presence, README
+    # images, defaults.parm contents, and the board build itself) live in
+    # test_new_boards.py, not here.  Add new-board-related checks there to keep
+    # them in one place and avoid the duplication this file once had.
 
     def check_markdown(self) -> bool:
         changed_md = self.run_git(
@@ -720,12 +665,11 @@ class CheckBranchConventions(build_script_base.BuildScriptBase):
             self.check_merge_commits(),
             self.check_fixup_commits(commits),
             self.check_commit_messages(commits),
+            self.check_commit_subsystems(),
             self.check_commit_lengths(commits),
             self.check_author_emails(),
             self.check_submodule_isolation(),
             self.check_submodule_references_exist(),
-            self.check_new_board_has_readme(),
-            self.check_new_board_images(),
             self.check_board_ids(),
             self.check_markdown(),
             self.check_markdown_rst_hyperlinks(),
