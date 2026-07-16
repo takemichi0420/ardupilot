@@ -5,24 +5,18 @@
 #include <AP_ExternalAHRS/AP_ExternalAHRS.h>
 #include <AP_AHRS/AP_AHRS.h>
 
-// true if the AHRS has completed initialisation
-bool AP_AHRS_External::initialised(void) const
-{
-    return AP::externalAHRS().initialised();
-}
-
 void AP_AHRS_External::update()
 {
     AP::externalAHRS().update();
 }
 
-bool AP_AHRS_External::healthy() const {
-    return AP::externalAHRS().healthy();
-}
-
 void AP_AHRS_External::get_results(AP_AHRS_Backend::Estimates &results)
 {
     auto &extahrs = AP::externalAHRS();
+
+    results.initialised = extahrs.initialised();
+
+    results.healthy = extahrs.healthy();
 
 #if AP_INERTIALSENSOR_ENABLED
     const AP_InertialSensor &_ins = AP::ins();
@@ -73,9 +67,30 @@ void AP_AHRS_External::get_results(AP_AHRS_Backend::Estimates &results)
      */
     results.location_valid = AP::externalAHRS().get_location(results.location);
 
+    // origin-relative functions
+    results.provides_common_origin = true;
+
+    // origin-relative position:
+    Location orgn;
+    if (extahrs.get_origin(orgn) &&
+        results.location_valid) {
+        const Vector3p posNED = orgn.get_distance_NED_postype(results.location);
+        results.position_NE = posNED.xy();
+        results.position_NE_valid = true;
+        results.position_D = posNED.z;
+        results.position_D_valid = true;
+    }
+
     // hagl is not supplied:
     // results.hagl_valid = false;
     // results.hagl = 0;
+
+    /*
+     * air data estimates
+     */
+    // wind estimate is not supplied:
+    // results.wind = {};
+    // results.wind_valid = false;
 
     /*
      * Sensor-related information
@@ -95,6 +110,17 @@ void AP_AHRS_External::get_results(AP_AHRS_Backend::Estimates &results)
     // are we consuming yaw from a source which is *not* a compass
     // results.using_noncompass_for_yaw = false;
 
+#if AP_AHRS_GET_MAG_DATA_ENABLED
+    // estimators can provide their predicted magnetic fields:
+    // ... but External does not, and probably should not as the
+    // external unit will be experiencing a different magnetic
+    // environment to the autopilot.
+    // results.mag_field_NED = {};
+    // results.mag_field_NED_valid = false;
+    // results.mag_field_corrections = {};
+    // results.mag_field_corrections_valid = false;
+#endif  // AP_AHRS_GET_MAG_DATA_ENABLED
+
     /*
      * filter status and estimates quality values:
      */
@@ -108,46 +134,6 @@ void AP_AHRS_External::get_results(AP_AHRS_Backend::Estimates &results)
     results.terrain_alt_variance_valid = true;
 }
 
-bool AP_AHRS_External::get_relative_position_NED_origin(Vector3p &vec) const
-{
-    auto &extahrs = AP::externalAHRS();
-    Location loc, orgn;
-    if (extahrs.get_origin(orgn) &&
-        extahrs.get_location(loc)) {
-        const Vector2f diff2d = orgn.get_distance_NE(loc);
-        vec = Vector3p(diff2d.x, diff2d.y,
-                       -(loc.alt - orgn.alt)*0.01);
-        return true;
-    }
-    return false;
-}
-
-bool AP_AHRS_External::get_relative_position_NE_origin(Vector2p &posNE) const
-{
-    auto &extahrs = AP::externalAHRS();
-
-    Location loc, orgn;
-    if (!extahrs.get_location(loc) ||
-        !extahrs.get_origin(orgn)) {
-        return false;
-    }
-    posNE = orgn.get_distance_NE_postype(loc);
-    return true;
-}
-
-bool AP_AHRS_External::get_relative_position_D_origin(postype_t &posD) const
-{
-    auto &extahrs = AP::externalAHRS();
-
-    Location orgn, loc;
-    if (!extahrs.get_origin(orgn) ||
-        !extahrs.get_location(loc)) {
-        return false;
-    }
-    posD = -(loc.alt - orgn.alt)*0.01;
-    return true;
-}
-
 bool AP_AHRS_External::pre_arm_check(bool requires_position, char *failure_msg, uint8_t failure_msg_len) const
 {
     return AP::externalAHRS().pre_arm_check(failure_msg, failure_msg_len);
@@ -156,6 +142,11 @@ bool AP_AHRS_External::pre_arm_check(bool requires_position, char *failure_msg, 
 bool AP_AHRS_External::get_origin(Location &ret) const
 {
     return AP::externalAHRS().get_origin(ret);
+}
+
+bool AP_AHRS_External::set_origin(const Location &loc)
+{
+    return AP::externalAHRS().set_origin(loc);
 }
 
 void AP_AHRS_External::get_control_limits(float &ekfGndSpdLimit, float &ekfNavVelGainScaler) const

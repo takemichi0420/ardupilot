@@ -35,19 +35,9 @@ public:
 
     const char *shortname() const override { return "EKF3"; }
 
-    bool healthy(void) const override {
-        if (!started) {
-            return false;
-        }
-        if (!EKF3.healthy()) {
-            return false;
-        }
-        return true;
-    }
-
     void reset_gyro_drift() override { EKF3.resetGyroBias(); }
 
-    void update() override { EKF3.UpdateFilter(); }
+    void update() override;
 
     void get_results(Estimates &results) override;
     void reset() override {
@@ -64,27 +54,10 @@ public:
         return EKF3.setOriginLLH(loc);
     }
 
-    // return a wind estimation vector, in m/s
-    bool wind_estimate(Vector3f &wind) const override {
-        return EKF3.getWind(wind);
-    }
-
     bool            use_compass() override {
         return EKF3.use_compass();
     }
 
-    uint32_t getLastYawResetAngle(float &yawAng) override {
-        return EKF3.getLastYawResetAngle(yawAng);
-    };
-    uint32_t getLastPosNorthEastReset(Vector2f &pos) override WARN_IF_UNUSED {
-        return EKF3.getLastPosNorthEastReset(pos);
-    };
-    uint32_t getLastVelNorthEastReset(Vector2f &vel) const override WARN_IF_UNUSED {
-        return EKF3.getLastVelNorthEastReset(vel);
-    };
-    uint32_t getLastPosDownReset(float &posDelta) override WARN_IF_UNUSED {
-        return EKF3.getLastPosDownReset(posDelta);
-    };
     void resetHeightDatum(void) override {
         EKF3.resetHeightDatum();
     }
@@ -110,7 +83,17 @@ public:
     // this is out here so parameters can be poked into it
     static NavEKF3 EKF3;
 
+    bool start();
     bool started;
+    uint32_t start_time_ms;  // timer used to delay starting the filter
+
+    // a counter which is incremented each time the primary core changes:
+    uint16_t attitude_reset_count;
+    int8_t old_primary_core;
+
+    AP_AHRS_ResetTracker<float, uint32_t> yaw_reset_tracker;
+    AP_AHRS_ResetTracker<Vector2f, uint32_t> position_NE_reset_tracker;
+    AP_AHRS_ResetTracker<float, uint32_t> position_D_reset_tracker;
 };
 
 #endif  // AP_AHRS_NAVEKF3_ENABLED

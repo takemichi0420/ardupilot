@@ -616,20 +616,20 @@ void GCS_MAVLINK::send_proximity()
 // report AHRS2 state
 void GCS_MAVLINK::send_ahrs2()
 {
-    const AP_AHRS &ahrs = AP::ahrs();
-    Vector3f euler;
-    Location loc {};
-    // we want one or both of these, use | to avoid short-circuiting:
-    if (uint8_t(ahrs.get_secondary_attitude(euler)) |
-        uint8_t(ahrs.get_secondary_position(loc))) {
+    const auto *estimates = AP::ahrs().get_secondary_estimates();
+    if (estimates == nullptr) {
+        return;
+    }
+
+    const Location &loc = estimates->location;
+
         mavlink_msg_ahrs2_send(chan,
-                               euler.x,
-                               euler.y,
-                               euler.z,
+                               estimates->roll_rad,
+                               estimates->pitch_rad,
+                               estimates->yaw_rad,
                                loc.alt*1.0e-2f,
                                loc.lat,
                                loc.lng);
-    }
 }
 #endif  // AP_AHRS_ENABLED
 
@@ -3094,6 +3094,13 @@ void GCS_MAVLINK::send_named_float(const char *name, float value) const
     char float_name[MAVLINK_MSG_NAMED_VALUE_FLOAT_FIELD_NAME_LEN+1] {};
     strncpy(float_name, name, MAVLINK_MSG_NAMED_VALUE_FLOAT_FIELD_NAME_LEN);
     mavlink_msg_named_value_float_send(chan, AP_HAL::millis(), float_name, value);
+}
+
+void GCS_MAVLINK::send_named_int(const char *name, int32_t value) const
+{
+    char int_name[MAVLINK_MSG_NAMED_VALUE_INT_FIELD_NAME_LEN+1] {};
+    strncpy(int_name, name, MAVLINK_MSG_NAMED_VALUE_INT_FIELD_NAME_LEN);
+    mavlink_msg_named_value_int_send(chan, AP_HAL::millis(), int_name, value);
 }
 
 #if AP_AHRS_ENABLED
