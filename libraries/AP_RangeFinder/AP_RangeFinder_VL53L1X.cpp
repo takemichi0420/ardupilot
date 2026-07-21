@@ -26,15 +26,108 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/utility/sparse-endian.h>
+#include <GCS_MAVLink/GCS.h>
 #include <stdio.h>
 
 extern const AP_HAL::HAL& hal;
+
+#ifndef AP_RANGEFINDER_VL53L1X_DIAG_GCS_TEXT_LIMIT
+#define AP_RANGEFINDER_VL53L1X_DIAG_GCS_TEXT_LIMIT 0
+#endif
+
+#if AP_RANGEFINDER_VL53L1X_DIAG_GCS_TEXT_LIMIT > 0
+static uint8_t vl53_gcs_text_count;
+#define vl53_diag(fmt, args ...) do { \
+        printf(fmt, ## args); \
+        printf("\n"); \
+        if (vl53_gcs_text_count < AP_RANGEFINDER_VL53L1X_DIAG_GCS_TEXT_LIMIT) { \
+            vl53_gcs_text_count++; \
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt, ## args); \
+        } \
+    } while (0)
+#else
+#define vl53_diag(fmt, args ...) do { printf(fmt, ## args); printf("\n"); GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt, ## args); } while (0)
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_ACCEPT_L3CX_ID
+#define AP_RANGEFINDER_VL53L1X_ACCEPT_L3CX_ID 0
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_DIAG_RAW_READS
+#define AP_RANGEFINDER_VL53L1X_DIAG_RAW_READS 0
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_DIAG_READY_READS
+#define AP_RANGEFINDER_VL53L1X_DIAG_READY_READS 0
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_DIAG_READ_ON_READY_TIMEOUT
+#define AP_RANGEFINDER_VL53L1X_DIAG_READ_ON_READY_TIMEOUT 0
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_DIAG_DUMP_EVERY_READ
+#define AP_RANGEFINDER_VL53L1X_DIAG_DUMP_EVERY_READ 0
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_USE_INTERRUPT_STATUS_READY
+#define AP_RANGEFINDER_VL53L1X_USE_INTERRUPT_STATUS_READY 0
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_DIAG_SINGLE_SHOT_ON_TIMEOUT
+#define AP_RANGEFINDER_VL53L1X_DIAG_SINGLE_SHOT_ON_TIMEOUT 0
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_DIAG_SINGLE_SHOT_TIMEOUT_MS
+#define AP_RANGEFINDER_VL53L1X_DIAG_SINGLE_SHOT_TIMEOUT_MS 100
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_RESTART_AFTER_CLEAR
+#define AP_RANGEFINDER_VL53L1X_RESTART_AFTER_CLEAR 0
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_DIAG_ACCEPT_ANY_RANGE_STATUS
+#define AP_RANGEFINDER_VL53L1X_DIAG_ACCEPT_ANY_RANGE_STATUS 0
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_DIAG_ALLOW_UNCALIBRATED
+#define AP_RANGEFINDER_VL53L1X_DIAG_ALLOW_UNCALIBRATED 0
+#endif
+
+#ifndef AP_RANGEFINDER_VL53L1X_DIAG_PUBLISH_READY_RANGE
+#define AP_RANGEFINDER_VL53L1X_DIAG_PUBLISH_READY_RANGE 0
+#endif
+
+static bool vl53_diag_raw_allowed(uint8_t count)
+{
+#if AP_RANGEFINDER_VL53L1X_DIAG_RAW_READS > 0
+    return count < AP_RANGEFINDER_VL53L1X_DIAG_RAW_READS;
+#else
+    (void)count;
+    return false;
+#endif
+}
+
+static bool vl53_diag_ready_allowed(uint8_t count)
+{
+#if AP_RANGEFINDER_VL53L1X_DIAG_READY_READS > 0
+    return count < AP_RANGEFINDER_VL53L1X_DIAG_READY_READS;
+#else
+    (void)count;
+    return false;
+#endif
+}
 
 static const uint8_t MEASUREMENT_TIME_MS = 50; // Start continuous readings at a rate of one measurement every 50 ms
 
 AP_RangeFinder_VL53L1X::AP_RangeFinder_VL53L1X(RangeFinder::RangeFinder_State &_state, AP_RangeFinder_Params &_params, AP_HAL::OwnPtr<AP_HAL::I2CDevice> _dev)
     : AP_RangeFinder_Backend(_state, _params)
-    , dev(std::move(_dev)) {}
+    , dev(std::move(_dev))
+    , calibrated(false)
+    , diag_status_reported(false)
+    , diag_publish_reported(false)
+    , diag_last_status(RangeFinder::Status::NotConnected)
+    , diag_raw_count(0)
+    , diag_ready_count(0) {}
 
 /*
    detect if a VL53L1X rangefinder is connected. We'll detect by
@@ -43,25 +136,33 @@ AP_RangeFinder_VL53L1X::AP_RangeFinder_VL53L1X(RangeFinder::RangeFinder_State &_
 */
 AP_RangeFinder_Backend *AP_RangeFinder_VL53L1X::detect(RangeFinder::RangeFinder_State &_state, AP_RangeFinder_Params &_params, AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev, DistanceMode mode)
 {
+    vl53_diag("VL53: probe start VL53L1X");
     if (!dev) {
+        vl53_diag("VL53: I2C open failed VL53L1X");
         return nullptr;
     }
+    vl53_diag("VL53: I2C addr 0x%02x bus %u VL53L1X", dev->get_bus_address(), (unsigned)dev->bus_num());
 
     AP_RangeFinder_VL53L1X *sensor
         = NEW_NOTHROW AP_RangeFinder_VL53L1X(_state, _params, std::move(dev));
 
     if (!sensor) {
+        vl53_diag("VL53: init failed VL53L1X alloc");
         delete sensor;
         return nullptr;
     }
 
     sensor->dev->get_semaphore()->take_blocking();
 
-    if (!sensor->check_id() || !sensor->init(mode)) {
+    const bool id_ok = sensor->check_id();
+    const bool init_ok = id_ok && sensor->init(mode);
+    if (!id_ok || !init_ok) {
+        vl53_diag("VL53: init failed VL53L1X");
         sensor->dev->get_semaphore()->give();
         delete sensor;
         return nullptr;
     }
+    vl53_diag("VL53: init success VL53L1X");
 
     sensor->dev->get_semaphore()->give();
 
@@ -74,15 +175,27 @@ bool AP_RangeFinder_VL53L1X::check_id(void)
     uint8_t v1, v2;
     if (!(read_register(0x010F, v1) &&
           read_register(0x0110, v2))) {
+        vl53_diag("VL53: device id read failed VL53L1X");
         return false;
     }
 
-    if ((v1 != 0xEA) ||
-        (v2 != 0xCC)) {
+    vl53_diag("VL53: device id 0x%02x%02x VL53L1X", v1, v2);
+    if ((v1 == 0xEA) && (v2 == 0xCC)) {
+        printf("Detected VL53L1X on bus 0x%x\n", unsigned(dev->get_bus_id()));
+        return true;
+    }
+
+#if AP_RANGEFINDER_VL53L1X_ACCEPT_L3CX_ID
+    if ((v1 == 0xEA) && (v2 == 0xAA)) {
+        vl53_diag("VL53L1X/L3CX: accepting device id 0xeaaa for diagnostic");
+        return true;
+    }
+#endif
+
+    {
+        vl53_diag("VL53: device id mismatch VL53L1X");
         return false;
     }
-    printf("Detected VL53L1X on bus 0x%x\n", unsigned(dev->get_bus_id()));
-    return true;
 }
 
 bool AP_RangeFinder_VL53L1X::reset(void) {
@@ -107,74 +220,67 @@ bool AP_RangeFinder_VL53L1X::reset(void) {
  */
 bool AP_RangeFinder_VL53L1X::init(DistanceMode mode)
 {
+    vl53_diag("VL53: init start VL53L1X/L3CX mode=%u", (unsigned)mode);
+#define VL53_INIT_STEP(_name, _expr) do { \
+        if (!(_expr)) { \
+            vl53_diag("VL53: init step %s failed", _name); \
+            return false; \
+        } \
+        vl53_diag("VL53: init step %s success", _name); \
+    } while (0)
+
     // we need to do resets and delays in order to configure the sensor, don't do this if we are trying to fast boot
     if (hal.util->was_watchdog_armed()) {
+        vl53_diag("VL53: init step watchdog fastboot failed");
         return false;
     }
 
     uint8_t pad_i2c_hv_extsup_config = 0;
     uint16_t mm_config_outer_offset_mm = 0;
-    if (!(reset() && // reset the chip, we make assumptions later on that we are on a clean power on of the sensor
-          // setup for 2.8V operation
-          read_register(PAD_I2C_HV__EXTSUP_CONFIG, pad_i2c_hv_extsup_config) &&
-          write_register(PAD_I2C_HV__EXTSUP_CONFIG,
-                         pad_i2c_hv_extsup_config | 0x01) &&
 
-          // store oscillator info for later use
-          read_register16(OSC_MEASURED__FAST_OSC__FREQUENCY, fast_osc_frequency) &&
-          read_register16(RESULT__OSC_CALIBRATE_VAL, osc_calibrate_val) &&
-
-          // static config
-          write_register16(DSS_CONFIG__TARGET_TOTAL_RATE_MCPS, TargetRate) && // should already be this value after reset
-          write_register(GPIO__TIO_HV_STATUS, 0x02) &&
-          write_register(SIGMA_ESTIMATOR__EFFECTIVE_PULSE_WIDTH_NS, 8) && // tuning parm default
-          write_register(SIGMA_ESTIMATOR__EFFECTIVE_AMBIENT_WIDTH_NS, 16) && // tuning parm default
-          write_register(ALGO__CROSSTALK_COMPENSATION_VALID_HEIGHT_MM, 0x01) &&
-          write_register(ALGO__RANGE_IGNORE_VALID_HEIGHT_MM, 0xFF) &&
-          write_register(ALGO__RANGE_MIN_CLIP, 0) && // tuning parm default
-          write_register(ALGO__CONSISTENCY_CHECK__TOLERANCE, 2) && // tuning parm default
-
-          // general config
-          write_register16(SYSTEM__THRESH_RATE_HIGH, 0x0000) &&
-          write_register16(SYSTEM__THRESH_RATE_LOW, 0x0000) &&
-          write_register(DSS_CONFIG__APERTURE_ATTENUATION, 0x38) &&
-
-          // timing config
-          write_register16(RANGE_CONFIG__SIGMA_THRESH, 360) && // tuning parm default
-          write_register16(RANGE_CONFIG__MIN_COUNT_RATE_RTN_LIMIT_MCPS, 192) && // tuning parm default
-
-          // dynamic config
-          write_register(SYSTEM__GROUPED_PARAMETER_HOLD_0, 0x01) &&
-          write_register(SYSTEM__GROUPED_PARAMETER_HOLD_1, 0x01) &&
-          write_register(SD_CONFIG__QUANTIFIER, 2) && // tuning parm default
-
-          // from VL53L1_preset_mode_timed_ranging_*
-          // GPH is 0 after reset, but writing GPH0 and GPH1 above seem to set GPH to 1,
-          // and things don't seem to work if we don't set GPH back to 0 (which the API
-          // does here).
-          write_register(SYSTEM__GROUPED_PARAMETER_HOLD, 0x00) &&
-          write_register(SYSTEM__SEED_CONFIG, 1) && // tuning parm default
-
-          // from VL53L1_config_low_power_auto_mode
-          write_register(SYSTEM__SEQUENCE_CONFIG, 0x8B) && // VHV, PHASECAL, DSS1, RANGE
-          write_register16(DSS_CONFIG__MANUAL_EFFECTIVE_SPADS_SELECT, 200 << 8) &&
-          write_register(DSS_CONFIG__ROI_MODE_CONTROL, 2) && // REQUESTED_EFFFECTIVE_SPADS
-          read_register16(MM_CONFIG__OUTER_OFFSET_MM, mm_config_outer_offset_mm) &&
-          setDistanceMode(mode) &&
-          setMeasurementTimingBudget(40000) &&
-          // the API triggers this change in VL53L1_init_and_start_range() once a
-          // measurement is started; assumes MM1 and MM2 are disabled
-          write_register16(ALGO__PART_TO_PART_RANGE_OFFSET_MM, mm_config_outer_offset_mm * 4) &&
-          // set continuous mode
-          startContinuous(MEASUREMENT_TIME_MS)
-          )) {
-              return false;
-          }
+    VL53_INIT_STEP("reset", reset());
+    VL53_INIT_STEP("read PAD_I2C_HV__EXTSUP_CONFIG", read_register(PAD_I2C_HV__EXTSUP_CONFIG, pad_i2c_hv_extsup_config));
+    VL53_INIT_STEP("write PAD_I2C_HV__EXTSUP_CONFIG", write_register(PAD_I2C_HV__EXTSUP_CONFIG, pad_i2c_hv_extsup_config | 0x01));
+    VL53_INIT_STEP("read fast oscillator", read_register16(OSC_MEASURED__FAST_OSC__FREQUENCY, fast_osc_frequency));
+    VL53_INIT_STEP("read osc calibration", read_register16(RESULT__OSC_CALIBRATE_VAL, osc_calibrate_val));
+    VL53_INIT_STEP("static config",
+                   write_register16(DSS_CONFIG__TARGET_TOTAL_RATE_MCPS, TargetRate) &&
+                   write_register(GPIO__TIO_HV_STATUS, 0x02) &&
+                   write_register(SIGMA_ESTIMATOR__EFFECTIVE_PULSE_WIDTH_NS, 8) &&
+                   write_register(SIGMA_ESTIMATOR__EFFECTIVE_AMBIENT_WIDTH_NS, 16) &&
+                   write_register(ALGO__CROSSTALK_COMPENSATION_VALID_HEIGHT_MM, 0x01) &&
+                   write_register(ALGO__RANGE_IGNORE_VALID_HEIGHT_MM, 0xFF) &&
+                   write_register(ALGO__RANGE_MIN_CLIP, 0) &&
+                   write_register(ALGO__CONSISTENCY_CHECK__TOLERANCE, 2));
+    VL53_INIT_STEP("general config",
+                   write_register16(SYSTEM__THRESH_RATE_HIGH, 0x0000) &&
+                   write_register16(SYSTEM__THRESH_RATE_LOW, 0x0000) &&
+                   write_register(DSS_CONFIG__APERTURE_ATTENUATION, 0x38));
+    VL53_INIT_STEP("timing config",
+                   write_register16(RANGE_CONFIG__SIGMA_THRESH, 360) &&
+                   write_register16(RANGE_CONFIG__MIN_COUNT_RATE_RTN_LIMIT_MCPS, 192));
+    VL53_INIT_STEP("dynamic config",
+                   write_register(SYSTEM__GROUPED_PARAMETER_HOLD_0, 0x01) &&
+                   write_register(SYSTEM__GROUPED_PARAMETER_HOLD_1, 0x01) &&
+                   write_register(SD_CONFIG__QUANTIFIER, 2));
+    VL53_INIT_STEP("low power auto config",
+                   write_register(SYSTEM__GROUPED_PARAMETER_HOLD, 0x00) &&
+                   write_register(SYSTEM__SEED_CONFIG, 1) &&
+                   write_register(SYSTEM__SEQUENCE_CONFIG, 0x8B) &&
+                   write_register16(DSS_CONFIG__MANUAL_EFFECTIVE_SPADS_SELECT, 200 << 8) &&
+                   write_register(DSS_CONFIG__ROI_MODE_CONTROL, 2));
+    VL53_INIT_STEP("read MM_CONFIG__OUTER_OFFSET_MM", read_register16(MM_CONFIG__OUTER_OFFSET_MM, mm_config_outer_offset_mm));
+    VL53_INIT_STEP("setDistanceMode", setDistanceMode(mode));
+    VL53_INIT_STEP("setMeasurementTimingBudget", setMeasurementTimingBudget(40000));
+    VL53_INIT_STEP("write part-to-part offset", write_register16(ALGO__PART_TO_PART_RANGE_OFFSET_MM, mm_config_outer_offset_mm * 4));
+    VL53_INIT_STEP("startContinuous", startContinuous(MEASUREMENT_TIME_MS));
 
     // call timer() every MEASUREMENT_TIME_MS. We expect new data to be available every MEASUREMENT_TIME_MS
     dev->register_periodic_callback(MEASUREMENT_TIME_MS * 1000,
                                     FUNCTOR_BIND_MEMBER(&AP_RangeFinder_VL53L1X::timer, void));
 
+    vl53_diag("VL53: init success VL53L1X/L3CX");
+#undef VL53_INIT_STEP
     return true;
 }
 
@@ -355,11 +461,68 @@ bool AP_RangeFinder_VL53L1X::startContinuous(uint32_t period_ms)
 {
     // fix for actual measurement period shorter than set
     uint32_t adjusted_period_ms = period_ms + (period_ms * 64 / 1000);
+    const uint32_t period_reg = adjusted_period_ms * osc_calibrate_val;
 
     // from VL53L1_set_inter_measurement_period_ms()
-    return write_register32(SYSTEM__INTERMEASUREMENT_PERIOD, adjusted_period_ms * osc_calibrate_val) &&
-           write_register(SYSTEM__INTERRUPT_CLEAR, 0x01) && // sys_interrupt_clear_range
-           write_register(SYSTEM__MODE_START, 0x40); // mode_range__timed
+    vl53_diag("VL53: startContinuous period_ms=%lu adjusted_ms=%lu osc=0x%04x period_reg=0x%08lx",
+              (unsigned long)period_ms,
+              (unsigned long)adjusted_period_ms,
+              (unsigned)osc_calibrate_val,
+              (unsigned long)period_reg);
+
+    if (!write_register32(SYSTEM__INTERMEASUREMENT_PERIOD, period_reg)) {
+        vl53_diag("VL53: startContinuous write period failed");
+        return false;
+    }
+
+    uint32_t period_readback = 0;
+    if (read_register32(SYSTEM__INTERMEASUREMENT_PERIOD, period_readback)) {
+        vl53_diag("VL53: startContinuous period_readback=0x%08lx", (unsigned long)period_readback);
+    } else {
+        vl53_diag("VL53: startContinuous period_readback failed");
+    }
+
+    if (!write_register(SYSTEM__INTERRUPT_CLEAR, 0x01)) { // sys_interrupt_clear_range
+        vl53_diag("VL53: startContinuous interrupt clear failed");
+        return false;
+    }
+
+    if (!write_register(SYSTEM__MODE_START, 0x40)) { // mode_range__timed
+        vl53_diag("VL53: startContinuous mode start failed");
+        return false;
+    }
+
+    uint8_t mode_start = 0;
+    if (read_register(SYSTEM__MODE_START, mode_start)) {
+        vl53_diag("VL53: startContinuous mode_start=0x%02x", mode_start);
+    }
+
+    log_diagnostic_registers("after startContinuous");
+    return true;
+}
+
+bool AP_RangeFinder_VL53L1X::clearInterruptAndStartNextRange(uint8_t mode_start)
+{
+    if (!write_register(SYSTEM__INTERRUPT_CLEAR, 0x01)) {
+        vl53_diag("VL53: clearInterrupt failed");
+        return false;
+    }
+
+#if AP_RANGEFINDER_VL53L1X_RESTART_AFTER_CLEAR
+    if (!write_register(SYSTEM__MODE_START, mode_start)) {
+        vl53_diag("VL53: restart after clear failed mode=0x%02x", mode_start);
+        return false;
+    }
+
+#if AP_RANGEFINDER_VL53L1X_DIAG_DUMP_EVERY_READ
+    uint8_t mode_readback = 0;
+    if (read_register(SYSTEM__MODE_START, mode_readback)) {
+        vl53_diag("VL53: restart after clear mode_start=0x%02x", mode_readback);
+    }
+#endif
+#endif
+
+    return true;
 }
 
 // Decode sequence step timeout in MCLKs from register value
@@ -463,24 +626,121 @@ bool AP_RangeFinder_VL53L1X::dataReady(void)
            ((gpio_tio_hv_status & 0x01) == 0);
 }
 
-// read - return last value measured by sensor
-bool AP_RangeFinder_VL53L1X::get_reading(uint16_t &reading_mm)
+bool AP_RangeFinder_VL53L1X::dataReadyInterruptStatus(uint8_t &interrupt_status)
 {
-    uint8_t tries = 10;
-    while (!dataReady()) {
-        tries--;
-        hal.scheduler->delay(1);
-        if (tries == 0) {
-            return false;
-        }
-    }
-
-    uint8_t range_status = 0;
-
-    if (!(read_register(RESULT__RANGE_STATUS, range_status) &&
-          read_register16(RESULT__FINAL_CROSSTALK_CORRECTED_RANGE_MM_SD0, reading_mm))) {
+    if (!read_register(RESULT__INTERRUPT_STATUS, interrupt_status)) {
         return false;
     }
+
+    return (interrupt_status & 0x07) != 0;
+}
+
+void AP_RangeFinder_VL53L1X::log_result_registers(const char *context)
+{
+    uint8_t interrupt_status = 0;
+    uint8_t range_status = 0;
+    uint16_t range_mm = 0;
+    const bool ok =
+        read_register(RESULT__INTERRUPT_STATUS, interrupt_status) &&
+        read_register(RESULT__RANGE_STATUS, range_status) &&
+        read_register16(RESULT__FINAL_CROSSTALK_CORRECTED_RANGE_MM_SD0, range_mm);
+
+    vl53_diag("VL53: result %s ok=%u int=0x%02x range_status=0x%02x range=%u",
+              context,
+              (unsigned)ok,
+              (unsigned)interrupt_status,
+              (unsigned)range_status,
+              (unsigned)range_mm);
+}
+
+void AP_RangeFinder_VL53L1X::log_diagnostic_registers(const char *context)
+{
+    uint8_t gpio = 0;
+    uint8_t interrupt_status = 0;
+    uint8_t range_status = 0;
+    uint8_t report_status = 0;
+    uint8_t stream_count = 0;
+    uint16_t range_mm = 0;
+    const bool live_ok =
+        read_register(GPIO__TIO_HV_STATUS, gpio) &&
+        read_register(RESULT__INTERRUPT_STATUS, interrupt_status) &&
+        read_register(RESULT__RANGE_STATUS, range_status) &&
+        read_register(RESULT__REPORT_STATUS, report_status) &&
+        read_register(RESULT__STREAM_COUNT, stream_count) &&
+        read_register16(RESULT__FINAL_CROSSTALK_CORRECTED_RANGE_MM_SD0, range_mm);
+
+    vl53_diag("VL53: diag %s live ok=%u gpio=0x%02x int=0x%02x range_status=0x%02x report=0x%02x stream=%u range=%u",
+              context,
+              (unsigned)live_ok,
+              (unsigned)gpio,
+              (unsigned)interrupt_status,
+              (unsigned)range_status,
+              (unsigned)report_status,
+              (unsigned)stream_count,
+              (unsigned)range_mm);
+
+    uint8_t shadow_interrupt_status = 0;
+    uint8_t shadow_range_status = 0;
+    uint8_t shadow_report_status = 0;
+    uint8_t shadow_stream_count = 0;
+    uint16_t shadow_range_mm = 0;
+    const bool shadow_ok =
+        read_register(SHADOW_RESULT__INTERRUPT_STATUS, shadow_interrupt_status) &&
+        read_register(SHADOW_RESULT__RANGE_STATUS, shadow_range_status) &&
+        read_register(SHADOW_RESULT__REPORT_STATUS, shadow_report_status) &&
+        read_register(SHADOW_RESULT__STREAM_COUNT, shadow_stream_count) &&
+        read_register16(SHADOW_RESULT__FINAL_CROSSTALK_CORRECTED_RANGE_MM_SD0, shadow_range_mm);
+
+    vl53_diag("VL53: diag %s shadow ok=%u int=0x%02x range_status=0x%02x report=0x%02x stream=%u range=%u",
+              context,
+              (unsigned)shadow_ok,
+              (unsigned)shadow_interrupt_status,
+              (unsigned)shadow_range_status,
+              (unsigned)shadow_report_status,
+              (unsigned)shadow_stream_count,
+              (unsigned)shadow_range_mm);
+
+    uint8_t prev_interrupt_status = 0;
+    uint8_t prev_range_status = 0;
+    uint8_t prev_report_status = 0;
+    uint8_t prev_stream_count = 0;
+    uint16_t prev_range_mm = 0;
+    const bool prev_ok =
+        read_register(PREV_SHADOW_RESULT__INTERRUPT_STATUS, prev_interrupt_status) &&
+        read_register(PREV_SHADOW_RESULT__RANGE_STATUS, prev_range_status) &&
+        read_register(PREV_SHADOW_RESULT__REPORT_STATUS, prev_report_status) &&
+        read_register(PREV_SHADOW_RESULT__STREAM_COUNT, prev_stream_count) &&
+        read_register16(PREV_SHADOW_RESULT__FINAL_CROSSTALK_CORRECTED_RANGE_MM_SD0, prev_range_mm);
+
+    vl53_diag("VL53: diag %s prev ok=%u int=0x%02x range_status=0x%02x report=0x%02x stream=%u range=%u",
+              context,
+              (unsigned)prev_ok,
+              (unsigned)prev_interrupt_status,
+              (unsigned)prev_range_status,
+              (unsigned)prev_report_status,
+              (unsigned)prev_stream_count,
+              (unsigned)prev_range_mm);
+}
+
+bool AP_RangeFinder_VL53L1X::readResult(uint16_t &reading_mm, const char *context)
+{
+    uint8_t interrupt_status = 0;
+    uint8_t range_status = 0;
+    uint16_t raw_mm = 0;
+
+    log_result_registers(context);
+
+    if (!(read_register(RESULT__INTERRUPT_STATUS, interrupt_status) &&
+          read_register(RESULT__RANGE_STATUS, range_status) &&
+          read_register16(RESULT__FINAL_CROSSTALK_CORRECTED_RANGE_MM_SD0, raw_mm))) {
+        if (vl53_diag_raw_allowed(diag_raw_count)) {
+            diag_raw_count++;
+            vl53_diag("VL53: distance read failed result registers");
+        }
+        return false;
+    }
+
+    reading_mm = raw_mm;
 
     // "apply correction gain"
     // gain factor of 2011 is tuning parm default (VL53L1_TUNINGPARM_LITE_RANGING_GAIN_FACTOR_DEFAULT)
@@ -488,26 +748,186 @@ bool AP_RangeFinder_VL53L1X::get_reading(uint16_t &reading_mm)
     // (with the 1024 added for proper rounding).
     reading_mm = ((uint32_t)reading_mm * 2011 + 0x0400) / 0x0800;
 
-    if (!write_register(SYSTEM__INTERRUPT_CLEAR, 0x01)) { // sys_interrupt_clear_range
+    if (!clearInterruptAndStartNextRange(0x40)) {
+        if (vl53_diag_raw_allowed(diag_raw_count)) {
+            diag_raw_count++;
+            vl53_diag("VL53: distance read failed interrupt clear/restart");
+        }
         return false;
     }
 
-    switch ((DeviceError)range_status) {
-      case RANGECOMPLETE:
-        break;
+#if AP_RANGEFINDER_VL53L1X_DIAG_PUBLISH_READY_RANGE
+    if (((interrupt_status & 0x07) != 0) && (raw_mm > 0)) {
+        if (!diag_publish_reported) {
+            diag_publish_reported = true;
+            vl53_diag("VL53: publishing diagnostic range int=0x%02x status=0x%02x raw=%u corrected=%u",
+                      (unsigned)interrupt_status,
+                      (unsigned)range_status,
+                      (unsigned)raw_mm,
+                      (unsigned)reading_mm);
+        }
+        return true;
+    }
+#endif
 
-      default:
+    if ((DeviceError)range_status != RANGECOMPLETE) {
+        if (vl53_diag_raw_allowed(diag_raw_count)) {
+            diag_raw_count++;
+            vl53_diag("VL53: distance raw = %u mm status=%u not complete", (unsigned)raw_mm, (unsigned)range_status);
+        }
+#if AP_RANGEFINDER_VL53L1X_DIAG_ACCEPT_ANY_RANGE_STATUS
+        if (raw_mm == 0 || raw_mm > 4000) {
+            return false;
+        }
+        vl53_diag("VL53: accepting range status=%u for diagnostic raw=%u corrected=%u",
+                  (unsigned)range_status,
+                  (unsigned)raw_mm,
+                  (unsigned)reading_mm);
+#else
 #ifdef VL53L1X_DEBUG
         hal.console->printf("VL53L1X: %d ms status %d\n", AP_HAL::millis(), (int)range_status);
 #endif // VL53L1X_DEBUG
         return false;
+#endif
     }
 
     if (!calibrated) {
         calibrated = setupManualCalibration();
+        if (!calibrated && vl53_diag_raw_allowed(diag_raw_count)) {
+            diag_raw_count++;
+            vl53_diag("VL53: setupManualCalibration failed");
+        }
+#if AP_RANGEFINDER_VL53L1X_DIAG_ALLOW_UNCALIBRATED
+        if (!calibrated) {
+            vl53_diag("VL53: accepting uncalibrated range for diagnostic");
+        }
+#else
+        if (!calibrated) {
+            return false;
+        }
+#endif
     }
 
-    return calibrated;
+    if ((calibrated || AP_RANGEFINDER_VL53L1X_DIAG_ALLOW_UNCALIBRATED) &&
+        vl53_diag_raw_allowed(diag_raw_count)) {
+        diag_raw_count++;
+        vl53_diag("VL53: distance raw = %u mm corrected=%u status=%u",
+                  (unsigned)raw_mm,
+                  (unsigned)reading_mm,
+                  (unsigned)range_status);
+    }
+
+    return calibrated || AP_RANGEFINDER_VL53L1X_DIAG_ALLOW_UNCALIBRATED;
+}
+
+bool AP_RangeFinder_VL53L1X::trySingleShotReading(uint16_t &reading_mm)
+{
+#if !AP_RANGEFINDER_VL53L1X_DIAG_SINGLE_SHOT_ON_TIMEOUT
+    return false;
+#else
+    vl53_diag("VL53: single-shot start");
+
+    if (!write_register(SYSTEM__INTERRUPT_CLEAR, 0x01)) {
+        vl53_diag("VL53: single-shot interrupt clear failed");
+        return false;
+    }
+
+    if (!write_register(SYSTEM__MODE_START, 0x10)) {
+        vl53_diag("VL53: single-shot mode start failed");
+        return false;
+    }
+
+    for (uint16_t i = 0; i < AP_RANGEFINDER_VL53L1X_DIAG_SINGLE_SHOT_TIMEOUT_MS; i++) {
+        uint8_t interrupt_status = 0;
+        const bool interrupt_ready = dataReadyInterruptStatus(interrupt_status);
+        const bool gpio_ready = dataReady();
+        if (interrupt_ready || gpio_ready) {
+            vl53_diag("VL53: single-shot ready gpio=%u int=0x%02x",
+                      (unsigned)gpio_ready,
+                      (unsigned)interrupt_status);
+            return readResult(reading_mm, "single-shot ready");
+        }
+
+        if ((i % 20) == 0) {
+            log_result_registers("single-shot wait");
+        }
+        hal.scheduler->delay(1);
+    }
+
+    vl53_diag("VL53: single-shot timeout");
+    log_result_registers("single-shot timeout");
+    return readResult(reading_mm, "single-shot timeout");
+#endif
+}
+
+// read - return last value measured by sensor
+bool AP_RangeFinder_VL53L1X::get_reading(uint16_t &reading_mm)
+{
+    uint8_t tries = 10;
+    bool ready = false;
+    while (true) {
+        uint8_t interrupt_status = 0;
+        const bool gpio_ready = dataReady();
+        const bool interrupt_ready = dataReadyInterruptStatus(interrupt_status);
+        const bool selected_ready =
+#if AP_RANGEFINDER_VL53L1X_USE_INTERRUPT_STATUS_READY
+            interrupt_ready;
+#else
+            gpio_ready;
+#endif
+
+#if AP_RANGEFINDER_VL53L1X_DIAG_DUMP_EVERY_READ
+        if (tries == 10) {
+            log_result_registers("poll");
+        }
+#endif
+
+        if (selected_ready) {
+            ready = true;
+            if (!gpio_ready && interrupt_ready && vl53_diag_ready_allowed(diag_ready_count)) {
+                diag_ready_count++;
+                vl53_diag("VL53: ready by RESULT__INTERRUPT_STATUS int=0x%02x", interrupt_status);
+            }
+            break;
+        }
+
+        if (vl53_diag_ready_allowed(diag_ready_count) &&
+            ((tries == 10) || (tries == 5) || (tries == 1))) {
+            diag_ready_count++;
+            log_diagnostic_registers("dataReady wait");
+        }
+        tries--;
+        hal.scheduler->delay(1);
+        if (tries == 0) {
+            if (vl53_diag_ready_allowed(diag_ready_count)) {
+                diag_ready_count++;
+                log_diagnostic_registers("dataReady timeout");
+            }
+            if (vl53_diag_raw_allowed(diag_raw_count)) {
+                diag_raw_count++;
+                vl53_diag("VL53: distance read failed dataReady timeout");
+            }
+#if AP_RANGEFINDER_VL53L1X_DIAG_READ_ON_READY_TIMEOUT
+            vl53_diag("VL53: dataReady timeout, reading result registers anyway");
+            break;
+#else
+            return false;
+#endif
+        }
+    }
+
+    if (ready && vl53_diag_ready_allowed(diag_ready_count)) {
+        diag_ready_count++;
+        log_diagnostic_registers("dataReady true");
+    }
+
+    if (ready || AP_RANGEFINDER_VL53L1X_DIAG_READ_ON_READY_TIMEOUT) {
+        if (readResult(reading_mm, ready ? "ready" : "timeout")) {
+            return true;
+        }
+    }
+
+    return trySingleShotReading(reading_mm);
 }
 
 bool AP_RangeFinder_VL53L1X::read_register(uint16_t reg, uint8_t &value)
@@ -524,6 +944,17 @@ bool AP_RangeFinder_VL53L1X::read_register16(uint16_t reg, uint16_t & value)
         return false;
     }
     value = be16toh(v);
+    return true;
+}
+
+bool AP_RangeFinder_VL53L1X::read_register32(uint16_t reg, uint32_t &value)
+{
+    uint8_t b[2] = { uint8_t(reg >> 8), uint8_t(reg & 0xFF) };
+    uint8_t v[4] {};
+    if (!dev->transfer(b, 2, v, 4)) {
+        return false;
+    }
+    value = be32toh_ptr(v);
     return true;
 }
 
@@ -578,6 +1009,16 @@ void AP_RangeFinder_VL53L1X::update(void)
     } else if (AP_HAL::millis() - state.last_reading_ms > 200) {
         // if no updates for 0.2s set no-data
         set_status(RangeFinder::Status::NoData);
+    }
+
+    if (!diag_status_reported || diag_last_status != status()) {
+        diag_status_reported = true;
+        diag_last_status = status();
+        if (status() == RangeFinder::Status::Good) {
+            vl53_diag("VL53: healthy VL53L1X");
+        } else {
+            vl53_diag("VL53: unhealthy VL53L1X status=%u", (unsigned)status());
+        }
     }
 }
 

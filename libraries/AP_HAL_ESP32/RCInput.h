@@ -46,6 +46,7 @@ public:
         return _rx_link_quality;
     }
 
+    void set_espnow_input(const uint16_t *values, uint8_t num_channels, int16_t rssi, int16_t link_quality);
     void _timer_tick(void);
 
 private:

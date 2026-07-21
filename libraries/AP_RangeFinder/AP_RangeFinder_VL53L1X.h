@@ -1279,13 +1279,25 @@ private:
     uint32_t sum_mm;
     uint32_t counter;
     bool calibrated;
+    bool diag_status_reported;
+    bool diag_publish_reported;
+    RangeFinder::Status diag_last_status;
+    uint8_t diag_raw_count;
+    uint8_t diag_ready_count;
 
     bool read_register(uint16_t reg, uint8_t &value) WARN_IF_UNUSED;
     bool read_register16(uint16_t reg, uint16_t &value) WARN_IF_UNUSED;
+    bool read_register32(uint16_t reg, uint32_t &value) WARN_IF_UNUSED;
     bool write_register(uint16_t reg, uint8_t value) WARN_IF_UNUSED;
     bool write_register16(uint16_t reg, uint16_t value) WARN_IF_UNUSED;
     bool write_register32(uint16_t reg, uint32_t value) WARN_IF_UNUSED;
+    void log_result_registers(const char *context);
+    void log_diagnostic_registers(const char *context);
     bool dataReady(void);
+    bool dataReadyInterruptStatus(uint8_t &interrupt_status) WARN_IF_UNUSED;
+    bool clearInterruptAndStartNextRange(uint8_t mode_start) WARN_IF_UNUSED;
+    bool readResult(uint16_t &reading_mm, const char *context) WARN_IF_UNUSED;
+    bool trySingleShotReading(uint16_t &reading_mm) WARN_IF_UNUSED;
     bool reset(void) WARN_IF_UNUSED;
     bool setDistanceMode(DistanceMode distance_mode) WARN_IF_UNUSED;
     bool setMeasurementTimingBudget(uint32_t budget_us) WARN_IF_UNUSED;

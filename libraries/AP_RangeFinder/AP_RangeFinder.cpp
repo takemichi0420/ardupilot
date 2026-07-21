@@ -36,6 +36,7 @@
 #include "AP_RangeFinder_TeraRanger_Serial.h"
 #include "AP_RangeFinder_VL53L0X.h"
 #include "AP_RangeFinder_VL53L1X.h"
+#include "AP_RangeFinder_VL53L3CX.h"
 #include "AP_RangeFinder_NMEA.h"
 #include "AP_RangeFinder_Wasp.h"
 #include "AP_RangeFinder_Benewake_TF02.h"
@@ -306,7 +307,7 @@ __INITFUNC__ void RangeFinder::probe_i2c_buses(uint8_t instance, uint8_t addr, i
 }
 
 /*
-  detect if an instance of a rangefinder is connected. 
+  detect if an instance of a rangefinder is connected.
  */
 __INITFUNC__ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial_instance)
 {
@@ -380,6 +381,14 @@ __INITFUNC__ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial
                                                                 hal.i2c_mgr->get_device(i, params[instance].address),
                                                                 _type == Type::VL53L1X_Short ?  AP_RangeFinder_VL53L1X::DistanceMode::Short :
                                                                 AP_RangeFinder_VL53L1X::DistanceMode::Long),
+                                 instance)) {
+                    break;
+                }
+#endif
+#if AP_RANGEFINDER_VL53L3CX_ENABLED
+                if (_add_backend(AP_RangeFinder_VL53L3CX::detect(state[instance], params[instance],
+                                                                 hal.i2c_mgr->get_device(i, params[instance].address,
+                                                                                         400000, false, 20)),
                                  instance)) {
                     break;
                 }
@@ -987,7 +996,7 @@ bool RangeFinder::prearm_healthy(char *failure_msg, const uint8_t failure_msg_le
             }
             break;
         }
-#endif // AP_RANGEFINDER_NRA24_CAN_DRIVER_ENABLED 
+#endif // AP_RANGEFINDER_NRA24_CAN_DRIVER_ENABLED
 
         default:
             break;

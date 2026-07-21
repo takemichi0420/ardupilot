@@ -49,9 +49,9 @@ private:
         INITIALIZED,
         CONNECTED
     };
-    const size_t TX_BUF_SIZE = 1024;
-    const size_t RX_BUF_SIZE = 1024;
-    uint8_t _buffer[255]; // 32 means slow param reads as its too small for most mavlink packets, 128 is still a bit small due to packet overheads
+    static constexpr size_t TX_BUF_SIZE = 4096;
+    static constexpr size_t RX_BUF_SIZE = 4096;
+    uint8_t _buffer[512];
     ByteBuffer _readbuf{0};
     ByteBuffer _writebuf{0};
     Semaphore _write_mutex;
@@ -59,6 +59,9 @@ private:
     ConnectionState _state;
 
     int accept_socket;
+    struct sockaddr_in _last_client_addr;
+    bool _have_client_addr;
+    uint32_t _last_client_ms;
 
     tskTaskControlBlock* _wifi_task_handle;
     void initialize_wifi();

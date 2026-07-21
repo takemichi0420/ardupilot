@@ -5,6 +5,7 @@ namespace ESP32
 class UARTDriver;
 class WiFiDriver;
 class WiFiUdpDriver;
+class ESPNowBridge;
 class Scheduler;
 class EEPROMStorage;
 class AnalogIn;

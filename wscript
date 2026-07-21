@@ -170,7 +170,7 @@ def options(opt):
         action='store_true',
         default=False,
         help='Generate wscript environment variable to .vscode/setting.json for Visual Studio Code')
-    
+
     g.add_option('--disable-watchdog',
         action='store_true',
         default=False,
@@ -190,7 +190,7 @@ def options(opt):
         action='store_true',
         default=None,
         help='Disable -Werror.')
-    
+
     g.add_option('--toolchain',
         action='store',
         default=None,
@@ -205,7 +205,7 @@ def options(opt):
         action='store_true',
         default=False,
         help='save compiler temporary files.')
-    
+
     g.add_option('--enable-malloc-guard',
         action='store_true',
         default=False,
@@ -230,7 +230,7 @@ def options(opt):
                  action='store',
                  default=None,
             help='path to private key for signing firmware.')
-    
+
     g.add_option('--no-autoconfig',
         dest='autoconfig',
         action='store_false',
@@ -272,7 +272,7 @@ submodules at specific revisions.
     g.add_option('--no-gcs', action='store_true',
                  default=False,
                  help="Disable GCS code")
-    
+
     g.add_option('--scripting-checks', action='store_true',
                  default=True,
                  help="Enable runtime scripting sanity checks")
@@ -302,7 +302,7 @@ submodules at specific revisions.
 
     g.add_option('--enable-networking-tests', action='store_true',
                  help="Enable the networking test code. Automatically enables networking.")
-    
+
     g.add_option('--enable-dronecan-tests', action='store_true',
                  default=False,
                  help="Enables DroneCAN tests in sitl")
@@ -371,7 +371,7 @@ configuration in order to save typing.
     g.add_option('--osd-fonts', action='store_true',
                  default=False,
                  help="Enable OSD support with fonts")
-    
+
     g.add_option('--sitl-osd', action='store_true',
                  default=False,
                  help="Enable SITL OSD")
@@ -402,7 +402,7 @@ configuration in order to save typing.
         action='store_true',
         default=False,
         help='Configure EKF as single precision.')
-    
+
     g.add_option('--static',
         action='store_true',
         default=False,
@@ -452,7 +452,7 @@ configuration in order to save typing.
 
     # support embedding lua drivers and applets
     add_script_options(g)
-    
+
 def _collect_autoconfig_files(cfg):
     for m in sys.modules.values():
         paths = []
@@ -484,7 +484,7 @@ def configure(cfg):
             if b.upper() == cfg.options.board.upper():
                 cfg.options.board = b
                 break
-        
+
     cfg.env.BOARD = cfg.options.board
     cfg.env.DEBUG = cfg.options.debug
     cfg.env.DEBUG_SYMBOLS = cfg.options.debug_symbols
@@ -601,6 +601,7 @@ def configure(cfg):
     else:
         cfg.end_msg('maybe')
     cfg.recurse('libraries/AP_Scripting')
+    cfg.recurse('libraries/AP_RangeFinder')
 
     cfg.recurse('libraries/AP_GPS')
     cfg.recurse('libraries/AP_HAL_SITL')
@@ -931,7 +932,7 @@ def _load_pre_build(bld):
         return
     brd = bld.get_board()
     if getattr(brd, 'pre_build', None):
-        brd.pre_build(bld)    
+        brd.pre_build(bld)
 
 def build(bld):
     if is_ci:

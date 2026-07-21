@@ -16,6 +16,7 @@
 #include "AP_HAL_ESP32/Scheduler.h"
 #include "AP_HAL_ESP32/RCInput.h"
 #include "AP_HAL_ESP32/AnalogIn.h"
+#include "AP_HAL_ESP32/ESPNowBridge.h"
 #include "AP_Math/AP_Math.h"
 #include "SdCard.h"
 #include "Profile.h"
@@ -34,6 +35,10 @@
 using namespace ESP32;
 
 extern const AP_HAL::HAL& hal;
+
+#ifndef HAL_ESP32_ESPNOW_ENABLED
+#define HAL_ESP32_ESPNOW_ENABLED 0
+#endif
 
 bool Scheduler::_initialized = true;
 
@@ -92,7 +97,7 @@ void Scheduler::init()
         hal.console->printf("FAILED to create task _timer_thread on FASTCPU\n");
     } else {
     	hal.console->printf("OK created task _timer_thread on FASTCPU\n");
-    }	
+    }
 
     if (xTaskCreatePinnedToCore(_rcout_thread, "APM_RCOUT", RCOUT_SS, this, RCOUT_PRIO, &_rcout_task_handle,SLOWCPU) != pdPASS) {
        hal.console->printf("FAILED to create task _rcout_thread on SLOWCPU\n");
@@ -111,14 +116,14 @@ void Scheduler::init()
         hal.console->printf("FAILED to create task _uart_thread on FASTCPU\n");
     } else {
     	hal.console->printf("OK created task _uart_thread on FASTCPU\n");
-    }	  
+    }
 
     // we put those on the SLOW core as it mounts the sd card, and that often isn't connected.
     if (xTaskCreatePinnedToCore(_io_thread, "SchedulerIO:APM_IO", IO_SS, this, IO_PRIO, &_io_task_handle,SLOWCPU) != pdPASS) {
         hal.console->printf("FAILED to create task _io_thread on SLOWCPU\n");
     } else {
         hal.console->printf("OK created task _io_thread on SLOWCPU\n");
-    }	 
+    }
 
     if (xTaskCreatePinnedToCore(_storage_thread, "APM_STORAGE", STORAGE_SS, this, STORAGE_PRIO, &_storage_task_handle,SLOWCPU) != pdPASS) { //no actual flash writes without this, storage kinda appears to work, but does an erase on every boot and params don't persist over reset etc.
         hal.console->printf("FAILED to create task _storage_thread on SLOWCPU\n");
@@ -554,6 +559,10 @@ void IRAM_ATTR Scheduler::_main_thread(void *arg)
 
     sched->callbacks->setup();
 
+#if HAL_ESP32_ESPNOW_ENABLED
+    ESPNowBridge::start_receiver();
+#endif
+
     sched->set_system_initialized();
 
     //initialize WTD for current thread on FASTCPU, all cores will be (1 << CONFIG_FREERTOS_NUMBER_OF_CORES) - 1
@@ -578,4 +587,3 @@ void IRAM_ATTR Scheduler::_main_thread(void *arg)
         };
     }
 }
-

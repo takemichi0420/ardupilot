@@ -16,13 +16,17 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Math/AP_Math.h>
+#include <GCS_MAVLink/GCS.h>
 #include <AP_HAL_ESP32/Semaphores.h>
 #include "Scheduler.h"
+#include <stdio.h>
 
 using namespace ESP32;
 
 #define MHZ (1000U*1000U)
 #define KHZ (1000U)
+
+#define esp32_i2c_diag(fmt, args ...)  do { printf(fmt, ## args); printf("\n"); GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt, ## args); } while(0)
 
 I2CBusDesc i2c_bus_desc[] = { HAL_ESP32_I2C_BUSES };
 
@@ -51,9 +55,18 @@ I2CDeviceManager::I2CDeviceManager(void)
             businfo[i].port = p;
             businfo[i].bus_clock = i2c_bus_desc[i].speed;
             businfo[i].soft = false;
-            i2c_param_config(p, &i2c_bus_config);
-            i2c_driver_install(p, I2C_MODE_MASTER, 0, 0, ESP_INTR_FLAG_IRAM);
-            i2c_filter_enable(p, 7);
+            esp_err_t err = i2c_param_config(p, &i2c_bus_config);
+            if (err != ESP_OK) {
+                esp32_i2c_diag("ESP32 I2C: bus config failed bus=%u err=%d", (unsigned)i, (int)err);
+            }
+            err = i2c_driver_install(p, I2C_MODE_MASTER, 0, 0, ESP_INTR_FLAG_IRAM);
+            if (err != ESP_OK) {
+                esp32_i2c_diag("ESP32 I2C: driver install failed bus=%u err=%d", (unsigned)i, (int)err);
+            }
+            err = i2c_filter_enable(p, 7);
+            if (err != ESP_OK) {
+                esp32_i2c_diag("ESP32 I2C: filter enable failed bus=%u err=%d", (unsigned)i, (int)err);
+            }
         }
     }
 }
@@ -62,7 +75,8 @@ I2CDevice::I2CDevice(uint8_t busnum, uint8_t address, uint32_t bus_clock, bool u
     bus(I2CDeviceManager::businfo[busnum]),
     _retries(10),
     _address(address),
-    _timeout_ms(timeout_ms)
+    _timeout_ms(timeout_ms),
+    _transfer_failure_reported(false)
 {
     set_device_bus(busnum);
     set_device_address(address);
@@ -132,6 +146,12 @@ bool I2CDevice::transfer(const uint8_t *send, uint32_t send_len,
         i2c_cmd_link_delete(cmd);
     }
 
+    if (!result && !_transfer_failure_reported) {
+        _transfer_failure_reported = true;
+        esp32_i2c_diag("ESP32 I2C: transfer failed bus=%u addr=0x%02x",
+                       (unsigned)bus_num(), (unsigned)_address);
+    }
+
     return result;
 }
 
@@ -159,9 +179,15 @@ I2CDeviceManager::get_device_ptr(uint8_t bus, uint8_t address,
                                  uint32_t timeout_ms)
 {
     if (bus >= ARRAY_SIZE(i2c_bus_desc)) {
+        esp32_i2c_diag("ESP32 I2C: open failed bus=%u addr=0x%02x", (unsigned)bus, (unsigned)address);
         return nullptr;
     }
-    return NEW_NOTHROW I2CDevice(bus, address, bus_clock, use_smbus, timeout_ms);
+    AP_HAL::I2CDevice *dev = NEW_NOTHROW I2CDevice(bus, address, bus_clock, use_smbus, timeout_ms);
+    if (dev == nullptr) {
+        esp32_i2c_diag("ESP32 I2C: open failed bus=%u addr=0x%02x alloc",
+                       (unsigned)bus, (unsigned)address);
+    }
+    return dev;
 }
 
 /*

@@ -81,6 +81,14 @@ extern const AP_HAL::HAL& hal;
 // timings in microseconds
 #define PIXART_Tsrad           300
 
+#ifndef AP_OPTICALFLOW_PIXART_TIMER_US
+#define AP_OPTICALFLOW_PIXART_TIMER_US 2000
+#endif
+
+#ifndef AP_OPTICALFLOW_PIXART_DXY_DEBUG
+#define AP_OPTICALFLOW_PIXART_DXY_DEBUG 0
+#endif
+
 // correct result for SROM CRC
 #define PIXART_SROM_CRC_RESULT 0xBEEF
 
@@ -168,7 +176,7 @@ bool AP_OpticalFlow_Pixart::setup_sensor(void)
 
     integral.last_frame_us = AP_HAL::micros();
 
-    _dev->register_periodic_callback(2000, FUNCTOR_BIND_MEMBER(&AP_OpticalFlow_Pixart::timer, void));
+    _dev->register_periodic_callback(AP_OPTICALFLOW_PIXART_TIMER_US, FUNCTOR_BIND_MEMBER(&AP_OpticalFlow_Pixart::timer, void));
     return true;
 }
 
@@ -337,9 +345,18 @@ void AP_OpticalFlow_Pixart::update(void)
 
     struct AP_OpticalFlow::OpticalFlow_state state;
     state.surface_quality = burst.squal;
+#if AP_OPTICALFLOW_PIXART_DXY_DEBUG
+    int32_t delta_x = 0;
+    int32_t delta_y = 0;
+#endif
 
     if (integral.sum_us > 0) {
         WITH_SEMAPHORE(_sem);
+
+#if AP_OPTICALFLOW_PIXART_DXY_DEBUG
+        delta_x = integral.sum.x;
+        delta_y = integral.sum.y;
+#endif
 
         const Vector2f flowScaler = _flowScaler();
         float flowScaleFactorX = 1.0f + 0.001f * flowScaler.x;
@@ -362,6 +379,13 @@ void AP_OpticalFlow_Pixart::update(void)
         state.flowRate.zero();
         state.bodyRate.zero();
     }
+
+#if AP_OPTICALFLOW_PIXART_DXY_DEBUG
+    printf("PixArt flow: dx=%ld dy=%ld quality=%u\n",
+           (long)delta_x,
+           (long)delta_y,
+           (unsigned)state.surface_quality);
+#endif
 
     // copy results to front end
     _update_frontend(state);

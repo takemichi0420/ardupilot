@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+
+def configure(cfg):
+    if cfg.env.BOARD != 'esp32s3m5stampfly':
+        return
+
+    source_dir = 'libraries/AP_RangeFinder/utility/vl53l3cx'
+    excluded_sources = {
+        'vl53lx_platform.c',
+        'vl53lx_platform_init.c',
+    }
+
+    sources = cfg.srcnode.ant_glob(source_dir + '/*.c', dir=False, src=True)
+    sources = [source for source in sources if source.name not in excluded_sources]
+    sources.append(cfg.srcnode.make_node(source_dir + '/vl53lx_platform_ap.cpp'))
+
+    cfg.env.AP_LIB_EXTRA_SOURCES['AP_RangeFinder'] = [str(source) for source in sources]
+    cfg.env.INCLUDES += [str(cfg.srcnode.make_node(source_dir))]

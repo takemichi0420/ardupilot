@@ -77,6 +77,7 @@ public:
                              uint32_t len) override;
     /* See AP_HAL::SPIDevice::transfer_fullduplex() */
     bool transfer_fullduplex(uint8_t *send_recv, uint32_t len) override;
+    bool set_chip_select(bool set) override;
     AP_HAL::Semaphore *get_semaphore() override;
     AP_HAL::Device::PeriodicHandle register_periodic_callback(
         uint32_t period_usec, AP_HAL::Device::PeriodicCb) override;
@@ -89,8 +90,11 @@ private:
     char *pname;
     spi_device_handle_t low_speed_dev_handle;
     spi_device_handle_t high_speed_dev_handle;
+    spi_device_handle_t forced_cs_handle;
+    bool cs_forced;
     spi_device_handle_t current_handle();
-    void acquire_bus(bool accuire);
+    bool acquire_bus(bool acquire);
+    bool set_cs_level(bool asserted);
 };
 
 #if defined(HAL_ESP32_SPI_BUSES)

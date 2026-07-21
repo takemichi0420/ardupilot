@@ -23,14 +23,23 @@
 #            Host      DMA Channel     MOSI        MISO        SCLK
 ESP32_SPIBUS SPI2_HOST SPI_DMA_CH_AUTO GPIO_NUM_14 GPIO_NUM_43 GPIO_NUM_44
 
-# the optical flow sensor (pixartflow) is on the same bus as the main IMU so
-# a) we have to list it here so its CS gets deasserted and the IMU can talk, but
-# b) we name it something the driver won't find because it's too slow and ties up the bus
+# the optical flow sensor (pixartflow) is on the same bus as the main IMU.
+# Keep the PixArt poll rate conservative to reduce contention on the shared bus.
+define AP_OPTICALFLOW_ENABLED 1
+define AP_OPTICALFLOW_PIXART_TIMER_US 10000
+define AP_OPTICALFLOW_PIXART_DXY_DEBUG 0
+define OPTICAL_FLOW_TYPE_DEFAULT Type::PIXART
+define HAL_ESP32_SPI_POLLING_TRANSACTIONS 1
+define AP_RANGEFINDER_VL53L1X_DIAG_GCS_TEXT_LIMIT 10
+define AP_RANGEFINDER_VL53L3CX_ENABLED 1
+define AP_RANGEFINDER_VL53L3CX_DIAG_GCS_TEXT_LIMIT 20
+define AP_RANGEFINDER_VL53L3CX_XSHUT_PIN 7
+define AP_RANGEFINDER_VL53L3CX_OTHER_XSHUT_PIN 9
 
 # SPI Devices
 #            Name                Bus   Device  ChipSel      Mode LoSpeed HiSpeed
 ESP32_SPIDEV bmi270              0     0       GPIO_NUM_46  3    10*MHZ  10*MHZ
-ESP32_SPIDEV pixartflow_disabled 0     1       GPIO_NUM_12  3     2*MHZ   2*MHZ
+ESP32_SPIDEV pixartflow          0     1       GPIO_NUM_12  3     2*MHZ   2*MHZ
 
 # i2c Buses
 #             Port       SDA         SCL         SPEED    INTERNAL SOFT
@@ -40,8 +49,10 @@ ESP32_I2CBUS  I2C_NUM_1  GPIO_NUM_13 GPIO_NUM_15 400*KHZ  false    false
 # one IMU:
 IMU BMI270 SPI:bmi270 ROTATION_ROLL_180_YAW_90
 
-# one Baro:
-BARO BMP280 I2C:0:0x76
+# Connection-recovery diagnostic: do not let a missing BMP280 stop vehicle init.
+# The production configuration should restore the probe after the I2C fault is fixed.
+# BARO BMP280 I2C:0:0x76
+define HAL_BARO_ALLOW_INIT_NO_BARO
 
 # HARDWARE UARTS. UART 0 apparently goes over USB? so we assign it to pins we
 # don't have mapped to anything. might be fixable in the HAL...
@@ -60,6 +71,9 @@ ESP32_RCOUT GPIO_NUM_41
 define AP_AIRSPEED_ENABLED 0
 
 define HAL_ESP32_BOARD_NAME "esp32s3m5stampfly"
+
+define HAL_ESP32_USB_SERIAL_JTAG 1
+define HAL_OTG1_CONFIG
 
 define AP_COMPASS_ENABLE_DEFAULT 0
 define ALLOW_ARM_NO_COMPASS
@@ -84,6 +98,7 @@ define WIFI_PWD "ardupilot123"
 define WIFI_CHANNEL 1
 define WIFI_HOSTNAME "ardupilot123"
 define WIFI_STA_POWER_SAVE WIFI_PS_NONE
+define HAL_ESP32_ESPNOW_ENABLED 1
 
 # rcin on what pin? enable AP_RCPROTOCOL_ENABLED below if using
 # currently on another unmapped pin

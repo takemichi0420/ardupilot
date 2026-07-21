@@ -26,9 +26,12 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/utility/sparse-endian.h>
+#include <GCS_MAVLink/GCS.h>
 #include <stdio.h>
 
 extern const AP_HAL::HAL& hal;
+
+#define vl53_diag(fmt, args ...)  do { printf(fmt, ## args); printf("\n"); GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt, ## args); } while(0)
 
 enum regAddr
 {
@@ -215,7 +218,9 @@ const AP_RangeFinder_VL53L0X::RegData AP_RangeFinder_VL53L0X::tuning_data[] =
 
 AP_RangeFinder_VL53L0X::AP_RangeFinder_VL53L0X(RangeFinder::RangeFinder_State &_state, AP_RangeFinder_Params &_params, AP_HAL::OwnPtr<AP_HAL::I2CDevice> _dev)
     : AP_RangeFinder_Backend(_state, _params)
-    , dev(std::move(_dev)) {}
+    , dev(std::move(_dev))
+    , diag_status_reported(false)
+    , diag_last_status(RangeFinder::Status::NotConnected) {}
 
 
 /*
@@ -225,27 +230,35 @@ AP_RangeFinder_VL53L0X::AP_RangeFinder_VL53L0X(RangeFinder::RangeFinder_State &_
 */
 AP_RangeFinder_Backend *AP_RangeFinder_VL53L0X::detect(RangeFinder::RangeFinder_State &_state, AP_RangeFinder_Params &_params, AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev)
 {
+    vl53_diag("VL53: probe start VL53L0X");
 	if (!dev) {
+        vl53_diag("VL53: I2C open failed VL53L0X");
 		return nullptr;
 	}
+    vl53_diag("VL53: I2C addr 0x%02x bus %u VL53L0X", dev->get_bus_address(), (unsigned)dev->bus_num());
     AP_RangeFinder_VL53L0X *sensor
         = NEW_NOTHROW AP_RangeFinder_VL53L0X(_state, _params, std::move(dev));
 
     if (!sensor) {
+        vl53_diag("VL53: init failed VL53L0X alloc");
         delete sensor;
         return nullptr;
     }
 
     sensor->dev->get_semaphore()->take_blocking();
-    
-    if (!sensor->check_id() || !sensor->init()) {
+
+    const bool id_ok = sensor->check_id();
+    const bool init_ok = id_ok && sensor->init();
+    if (!id_ok || !init_ok) {
+        vl53_diag("VL53: init failed VL53L0X");
         sensor->dev->get_semaphore()->give();
         delete sensor;
         return nullptr;
     }
+    vl53_diag("VL53: init success VL53L0X");
 
     sensor->dev->get_semaphore()->give();
-    
+
     return sensor;
 }
 
@@ -254,9 +267,14 @@ bool AP_RangeFinder_VL53L0X::check_id(void)
 {
     uint8_t v1, v2;
     if (!dev->read_registers(0xC0, &v1, 1) ||
-        !dev->read_registers(0xC1, &v2, 1) ||
-        v1 != 0xEE ||
+        !dev->read_registers(0xC1, &v2, 1)) {
+        vl53_diag("VL53: device id read failed VL53L0X");
+        return false;
+    }
+    vl53_diag("VL53: device id 0x%02x%02x VL53L0X", v1, v2);
+    if (v1 != 0xEE ||
         v2 != 0xAA) {
+        vl53_diag("VL53: device id mismatch VL53L0X");
         return false;
     }
     printf("Detected VL53L0X on bus 0x%x\n", unsigned(dev->get_bus_id()));
@@ -771,6 +789,16 @@ void AP_RangeFinder_VL53L0X::update(void)
         update_status();
     } else {
         set_status(RangeFinder::Status::NoData);
+    }
+
+    if (!diag_status_reported || diag_last_status != status()) {
+        diag_status_reported = true;
+        diag_last_status = status();
+        if (status() == RangeFinder::Status::Good) {
+            vl53_diag("VL53: healthy VL53L0X");
+        } else {
+            vl53_diag("VL53: unhealthy VL53L0X status=%u", (unsigned)status());
+        }
     }
 }
 

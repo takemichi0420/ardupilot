@@ -109,6 +109,23 @@ uint8_t RCInput::read(uint16_t* periods, uint8_t len)
     return len;
 }
 
+void RCInput::set_espnow_input(const uint16_t *values, uint8_t num_channels, int16_t rssi, int16_t link_quality)
+{
+    if (!_init || values == nullptr || num_channels == 0) {
+        return;
+    }
+
+    num_channels = MIN(num_channels, RC_INPUT_MAX_CHANNELS);
+    {
+        WITH_SEMAPHORE(rcin_mutex);
+        memcpy(_rc_values, values, num_channels * sizeof(_rc_values[0]));
+        _num_channels = num_channels;
+        _rssi = rssi;
+        _rx_link_quality = link_quality;
+        _rcin_timestamp_last_signal = AP_HAL::micros();
+    }
+}
+
 void RCInput::_timer_tick(void)
 {
     if (!_init) {

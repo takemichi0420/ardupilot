@@ -106,6 +106,7 @@ protected:
     uint8_t _address;
     char *pname;
     uint32_t _timeout_ms;
+    bool _transfer_failure_reported;
 };
 
 class I2CDeviceManager : public AP_HAL::I2CDeviceManager

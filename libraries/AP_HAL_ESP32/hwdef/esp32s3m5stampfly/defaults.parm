@@ -7,6 +7,14 @@ ARMING_SKIPCHK 1024 # disable logging check (in the event log rx is not up)
 LOG_DISARMED 1
 SCHED_LOOP_RATE 150 # flash won't go faster :(
 
+# onboard optical flow and rangefinder
+FLOW_TYPE 2 # Pixart PMW3901
+RNGFND1_TYPE 16 # VL53L0X or VL53L1X
+RNGFND1_ADDR 41 # 0x29
+RNGFND1_ORIENT 25 # ROTATION_PITCH_270
+RNGFND1_MIN 0.05
+RNGFND1_MAX 3.6
+
 # mavlink RC control
 FS_THR_ENABLE 0 # not wanted for mavlink control
 RC1_MIN 1101 # avoid calibration needed warning

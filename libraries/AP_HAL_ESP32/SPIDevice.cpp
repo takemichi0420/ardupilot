@@ -20,6 +20,7 @@
 #if AP_HAL_SPI_ENABLED
 
 #include <AP_Math/AP_Math.h>
+#include <GCS_MAVLink/GCS.h>
 #include "Scheduler.h"
 #include "Semaphores.h"
 #include <stdio.h>
@@ -29,7 +30,13 @@ using namespace ESP32;
 #define MHZ (1000U*1000U)
 #define KHZ (1000U)
 
+#ifndef HAL_ESP32_SPI_POLLING_TRANSACTIONS
+#define HAL_ESP32_SPI_POLLING_TRANSACTIONS 0
+#endif
+
 //#define SPIDEBUG 1
+
+#define esp32_spi_diag(fmt, args ...)  do { printf(fmt, ## args); printf("\n"); GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt, ## args); } while(0)
 
 #ifdef HAL_ESP32_SPI_BUSES
 SPIBusDesc bus_desc[] = {HAL_ESP32_SPI_BUSES};
@@ -54,7 +61,10 @@ SPIBus::SPIBus(uint8_t _bus):
         .quadwp_io_num = -1,
         .quadhd_io_num = -1
     };
-    spi_bus_initialize(bus_desc[_bus].host, &config, bus_desc[_bus].dma_ch);
+    const esp_err_t err = spi_bus_initialize(bus_desc[_bus].host, &config, bus_desc[_bus].dma_ch);
+    if (err != ESP_OK) {
+        esp32_spi_diag("ESP32 SPI: bus init failed bus=%u err=%d", (unsigned)_bus, (int)err);
+    }
 }
 #endif  // HAL_ESP32_SPI_BUSES
 
@@ -63,6 +73,12 @@ SPIBus::SPIBus(uint8_t _bus):
 SPIDevice::SPIDevice(SPIBus &_bus, SPIDeviceDesc &_device_desc)
     : bus(_bus)
     , device_desc(_device_desc)
+    , speed(AP_HAL::Device::SPEED_LOW)
+    , pname(nullptr)
+    , low_speed_dev_handle(nullptr)
+    , high_speed_dev_handle(nullptr)
+    , forced_cs_handle(nullptr)
+    , cs_forced(false)
 {
 
 #ifdef SPIDEBUG
@@ -78,8 +94,11 @@ SPIDevice::SPIDevice(SPIBus &_bus, SPIDeviceDesc &_device_desc)
     cfg_low.clock_speed_hz = _device_desc.lspeed;
     cfg_low.spics_io_num = -1;
     cfg_low.queue_size = 5;
-    spi_bus_add_device(bus_desc[_bus.bus].host, &cfg_low, &low_speed_dev_handle);
-
+    esp_err_t err = spi_bus_add_device(bus_desc[_bus.bus].host, &cfg_low, &low_speed_dev_handle);
+    if (err != ESP_OK) {
+        esp32_spi_diag("ESP32 SPI: open failed name=%s bus=%u low err=%d",
+                       _device_desc.name, (unsigned)_device_desc.bus, (int)err);
+    }
     if (_device_desc.hspeed != _device_desc.lspeed) {
         spi_device_interface_config_t cfg_high;
         memset(&cfg_high, 0, sizeof(cfg_high));
@@ -87,7 +106,11 @@ SPIDevice::SPIDevice(SPIBus &_bus, SPIDeviceDesc &_device_desc)
         cfg_high.clock_speed_hz = _device_desc.hspeed;
         cfg_high.spics_io_num = -1;
         cfg_high.queue_size = 5;
-        spi_bus_add_device(bus_desc[_bus.bus].host, &cfg_high, &high_speed_dev_handle);
+        err = spi_bus_add_device(bus_desc[_bus.bus].host, &cfg_high, &high_speed_dev_handle);
+        if (err != ESP_OK) {
+            esp32_spi_diag("ESP32 SPI: open failed name=%s bus=%u high err=%d",
+                           _device_desc.name, (unsigned)_device_desc.bus, (int)err);
+        }
     }
 
 
@@ -127,8 +150,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
 #endif
     if (!send || !recv) {
         // simplest cases
-        transfer_fullduplex(send, recv, recv_len?recv_len:send_len);
-        return true;
+        return transfer_fullduplex(send, recv, recv_len?recv_len:send_len);
     }
     uint8_t buf[send_len+recv_len];
     if (send_len > 0) {
@@ -137,7 +159,9 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
     if (recv_len > 0) {
         memset(&buf[send_len], 0, recv_len);
     }
-    transfer_fullduplex(buf, buf, send_len+recv_len);
+    if (!transfer_fullduplex(buf, buf, send_len+recv_len)) {
+        return false;
+    }
     if (recv_len > 0) {
         memcpy(recv, &buf[send_len], recv_len);
     }
@@ -154,30 +178,121 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
 #ifdef SPIDEBUG
     printf("%s:%d \n", __PRETTY_FUNCTION__, __LINE__);
 #endif
-    acquire_bus(true);
+    spi_device_handle_t handle = current_handle();
+    if (handle == nullptr) {
+        esp32_spi_diag("ESP32 SPI: transfer failed name=%s no handle", device_desc.name);
+        return false;
+    }
+    const bool acquired_here = !cs_forced;
+    if (acquired_here) {
+        if (!acquire_bus(true)) {
+            return false;
+        }
+    } else if (forced_cs_handle != handle) {
+        esp32_spi_diag("ESP32 SPI: transfer failed name=%s speed changed while CS forced", device_desc.name);
+        return false;
+    }
     spi_transaction_t t;
     memset(&t, 0, sizeof(t));
     t.length = len*8;
     t.tx_buffer = send;
     t.rxlength = len*8;
     t.rx_buffer = recv;
-    spi_device_transmit(current_handle(), &t);
-    acquire_bus(false);
+#if HAL_ESP32_SPI_POLLING_TRANSACTIONS
+    const esp_err_t err = spi_device_polling_transmit(handle, &t);
+#else
+    const esp_err_t err = spi_device_transmit(handle, &t);
+#endif
+    bool release_ok = true;
+    if (acquired_here) {
+        release_ok = acquire_bus(false);
+    }
+    if (err != ESP_OK) {
+        esp32_spi_diag("ESP32 SPI: transfer failed name=%s err=%d", device_desc.name, (int)err);
+        return false;
+    }
+    return release_ok;
+}
+
+bool SPIDevice::set_cs_level(bool asserted)
+{
+    const esp_err_t err = gpio_set_level(device_desc.cs, asserted ? 0 : 1);
+    if (err != ESP_OK) {
+        esp32_spi_diag("ESP32 SPI: CS set failed name=%s gpio=%u level=%u err=%d",
+                       device_desc.name,
+                       (unsigned)device_desc.cs,
+                       (unsigned)!asserted,
+                       (int)err);
+        return false;
+    }
     return true;
 }
 
-void SPIDevice::acquire_bus(bool accuire)
+bool SPIDevice::acquire_bus(bool acquire)
 {
 #ifdef SPIDEBUG
     printf("%s:%d \n", __PRETTY_FUNCTION__, __LINE__);
 #endif
-    if (accuire) {
-        spi_device_acquire_bus(current_handle(), portMAX_DELAY);
-        gpio_set_level(device_desc.cs, 0);
-    } else {
-        gpio_set_level(device_desc.cs, 1);
-        spi_device_release_bus(current_handle());
+    spi_device_handle_t handle = current_handle();
+    if (handle == nullptr) {
+        return false;
     }
+
+    if (acquire) {
+        const esp_err_t err = spi_device_acquire_bus(handle, portMAX_DELAY);
+        if (err != ESP_OK) {
+            esp32_spi_diag("ESP32 SPI: bus acquire failed name=%s err=%d", device_desc.name, (int)err);
+            return false;
+        }
+        if (!set_cs_level(true)) {
+            spi_device_release_bus(handle);
+            return false;
+        }
+    } else {
+        const bool result = set_cs_level(false);
+        spi_device_release_bus(handle);
+        return result;
+    }
+    return true;
+}
+
+bool SPIDevice::set_chip_select(bool set)
+{
+    if (!bus.semaphore.check_owner()) {
+        esp32_spi_diag("ESP32 SPI: set CS failed name=%s bus semaphore not owned", device_desc.name);
+        return false;
+    }
+
+    if (set) {
+        if (cs_forced) {
+            return true;
+        }
+        spi_device_handle_t handle = current_handle();
+        if (handle == nullptr) {
+            return false;
+        }
+        const esp_err_t err = spi_device_acquire_bus(handle, portMAX_DELAY);
+        if (err != ESP_OK) {
+            esp32_spi_diag("ESP32 SPI: forced CS acquire failed name=%s err=%d", device_desc.name, (int)err);
+            return false;
+        }
+        if (!set_cs_level(true)) {
+            spi_device_release_bus(handle);
+            return false;
+        }
+        forced_cs_handle = handle;
+        cs_forced = true;
+        return true;
+    }
+
+    if (!cs_forced) {
+        return false;
+    }
+    const bool result = set_cs_level(false);
+    spi_device_release_bus(forced_cs_handle);
+    forced_cs_handle = nullptr;
+    cs_forced = false;
+    return result;
 }
 
 AP_HAL::Semaphore *SPIDevice::get_semaphore()
@@ -215,6 +330,7 @@ SPIDeviceManager::get_device_ptr(const char *name)
         }
     }
     if (i == ARRAY_SIZE(device_desc)) {
+        esp32_spi_diag("ESP32 SPI: open failed name=%s not found", name);
         return nullptr;
     }
     SPIDeviceDesc &desc = device_desc[i];
@@ -237,6 +353,7 @@ SPIDeviceManager::get_device_ptr(const char *name)
         // create a new one
         busp = NEW_NOTHROW SPIBus(desc.bus);
         if (busp == nullptr) {
+            esp32_spi_diag("ESP32 SPI: open failed name=%s bus alloc", name);
             return nullptr;
         }
         busp->next = buses;
@@ -246,8 +363,18 @@ SPIDeviceManager::get_device_ptr(const char *name)
             SPIDeviceDesc &curr_desc = device_desc[i];
             if (desc.bus == curr_desc.bus) {
                 esp_rom_gpio_pad_select_gpio(curr_desc.cs);
-                gpio_set_direction(curr_desc.cs, GPIO_MODE_OUTPUT);
-                gpio_set_level(curr_desc.cs, 1);
+                // Set the output latch before enabling the driver to avoid a
+                // low pulse on an active-low chip select during startup.
+                const esp_err_t level_err = gpio_set_level(curr_desc.cs, 1);
+                const gpio_mode_t mode = GPIO_MODE_OUTPUT;
+                const esp_err_t direction_err = gpio_set_direction(curr_desc.cs, mode);
+                if (direction_err != ESP_OK || level_err != ESP_OK) {
+                    esp32_spi_diag("ESP32 SPI: CS init failed name=%s gpio=%u direction_err=%d level_err=%d",
+                                   curr_desc.name,
+                                   (unsigned)curr_desc.cs,
+                                   (int)direction_err,
+                                   (int)level_err);
+                }
             }
         }
         buses = busp;
@@ -257,7 +384,11 @@ SPIDeviceManager::get_device_ptr(const char *name)
     printf("%s:%d 444\n", __PRETTY_FUNCTION__, __LINE__);
 #endif
 
-    return NEW_NOTHROW SPIDevice(*busp, desc);
+    AP_HAL::SPIDevice *dev = NEW_NOTHROW SPIDevice(*busp, desc);
+    if (dev == nullptr) {
+        esp32_spi_diag("ESP32 SPI: open failed name=%s device alloc", name);
+    }
+    return dev;
 }
 #endif  // HAL_ESP32_SPI_DEVICES
 
