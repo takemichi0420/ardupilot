@@ -862,11 +862,18 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
         self.send_do_reposition(loc, frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT)
         self.wait_location(loc, timeout=120)
 
-        # Reposition, alt relative to seafloor
-        loc = self.offset_location_ne(loc, 10, 10)
-        loc.alt = -start_altitude
-        self.send_do_reposition(loc, frame=mavutil.mavlink.MAV_FRAME_GLOBAL_TERRAIN_ALT)
-        self.wait_location(loc, timeout=120)
+        # Reposition, alt relative to seafloor.  The SITL seafloor is
+        # ~50m deep here, so holding 25m above it is ~-25m AMSL.
+        # target_terrain abuses the location's alt field to carry a
+        # terrain-frame altitude, as send_do_reposition requires
+        seafloor_depth = 50
+        alt_above_seafloor = 25
+        target_terrain = self.offset_location_ne(loc, 10, 10)
+        target_terrain.alt = alt_above_seafloor
+        target_global = self.offset_location_ne(loc, 10, 10)
+        target_global.alt = alt_above_seafloor - seafloor_depth
+        self.send_do_reposition(target_terrain, frame=mavutil.mavlink.MAV_FRAME_GLOBAL_TERRAIN_ALT)
+        self.wait_location(target_global, timeout=120, height_accuracy=5)
 
         self.disarm_vehicle()
 
@@ -954,8 +961,12 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
             'AHRS_ORIGIN_LAT': 47.607584,
             'AHRS_ORIGIN_LON': -122.343911,
         })
-        self.reboot_sitl()
+        # the origin statustext is emitted early in the boot - with no
+        # GPS configured the EKF does not wait for anything before
+        # adopting the recorded origin - so collection must start
+        # before the reboot or the text can be missed:
         self.context_collect('STATUSTEXT')
+        self.reboot_sitl()
 
         # Wait for the EKF to be happy in constant position mode
         self.wait_ready_to_arm_const_pos()
@@ -1151,7 +1162,7 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
 
         self.progress("Connecting to telemetry port")
         mav2 = mavutil.mavlink_connection(
-            "tcp:localhost:5763",
+            "tcp:localhost:%u" % self.adjust_ardupilot_port(5763),
             robust_parsing=True,
             source_system=self.mav.source_system,
             source_component=self.mav.source_component,
@@ -1366,7 +1377,14 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
 
         self.set_parameter('WP_SPD', speed)
 
-        self.dive(-15)
+        # the vehicle reports wp_nav's distance-to-destination in
+        # NAV_CONTROLLER_OUTPUT; we use it to confirm our target has been
+        # accepted.  Ask for it before diving; there is no depth hold
+        # between the dive and entering GUIDED, so sim time spent here is
+        # spent floating away from the dived-to depth
+        self.context_set_message_rate_hz('NAV_CONTROLLER_OUTPUT', 10)
+
+        self.dive(-15, mode='ALT_HOLD')
 
         # GLOBAL_POSITION_INT will be our clock
         self.context_set_message_rate_hz('GLOBAL_POSITION_INT', 10)
@@ -1401,11 +1419,29 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
             current_alt = None
             max_error = 0.0
 
-            # Set the target
-            self.mav.mav.set_position_target_global_int_send(
-                0, 1, 1, run['frame'], pos_mode,
-                int(dest_loc[0] * 1e7), int(dest_loc[1] * 1e7), run['target_alt'],
-                0, 0, 0, 0, 0, 0, 0, 0)
+            # Send the target until the reported distance-to-destination
+            # shows it has become the current destination.  The vehicle
+            # can silently reject the target (e.g. a single bad
+            # rangefinder reading invalidates the terrain frame for an
+            # instant) and there is no acknowledgement to check, so a
+            # single send is not enough.
+            accept_start = self.get_sim_time()
+            accepted = False
+            while not accepted:
+                if self.get_sim_time_cached() - accept_start > 30:
+                    raise NotAchievedException(f'Frame {run["frame"]} target not accepted')
+                self.mav.mav.set_position_target_global_int_send(
+                    0, 1, 1, run['frame'], pos_mode,
+                    int(dest_loc[0] * 1e7), int(dest_loc[1] * 1e7), run['target_alt'],
+                    0, 0, 0, 0, 0, 0, 0, 0)
+                # wait a little for the new distance-to-destination to be
+                # reported before concluding the target was rejected
+                deadline = self.get_sim_time_cached() + 1
+                while self.get_sim_time_cached() < deadline:
+                    msg = self.assert_receive_message('NAV_CONTROLLER_OUTPUT')
+                    if abs(msg.wp_dist - distance) < 5:
+                        accepted = True
+                        break
 
             start_time = self.get_sim_time()
             while True:

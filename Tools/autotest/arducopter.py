@@ -1091,10 +1091,12 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         # to continue in guided. Verify no failsafe action takes place
         self.start_subtest("Radio failsafe with option to continue in guided mode: FS_THR_ENABLE=1 & FS_OPTIONS=4")
         self.set_parameter("MAV_GCS_SYSID", self.mav.source_system)
-        self.setGCSfailsafe(1)
         self.set_parameter('FS_THR_ENABLE', 1)
         self.set_parameter('FS_OPTIONS', 4)
         self.takeoffAndMoveAway()
+        # enable GCS failsafe only after the climb so the climb runs at
+        # full speedup; it only needs to be armed before SIM_RC_FAIL
+        self.setGCSfailsafe(1)
         self.change_mode("GUIDED")
         self.set_parameter("SIM_RC_FAIL", 1)
         self.delay_sim_time(5, reason="radio failsafe to not trigger")
@@ -1446,7 +1448,6 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         '''Fly Battery Failsafe'''
         self.progress("Configure battery failsafe parameters")
         self.set_parameters({
-            'SIM_SPEEDUP': 4,
             'BATT_LOW_VOLT': 11.5,
             'BATT_CRT_VOLT': 10.1,
             'BATT_FS_LOW_ACT': 0,
@@ -4734,16 +4735,26 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             self.drain_mav()
             self.context_collect('STATUSTEXT')
             self.reboot_sitl()
-            gps1_det_text = None
-            gps2_det_text = None
-            try:
-                gps1_det_text = self.wait_text("GPS 1: specified as DroneCAN.*", regex=True, check_context=True)
-            except AutoTestTimeoutException:
-                pass
-            try:
-                gps2_det_text = self.wait_text("GPS 2: specified as DroneCAN.*", regex=True, check_context=True)
-            except AutoTestTimeoutException:
-                pass
+            # detection statustexts for both GPSs are emitted together
+            # shortly after boot.  Wait for any GPS expected to be
+            # present first, so boot latency is absorbed by that wait;
+            # a GPS expected to be absent then only needs a short
+            # timeout, as a (wrongly) emitted detection statustext
+            # would already be in the collected context.
+            gps_det_texts = {}
+            for instance in sorted((1, 2), key=lambda i: case[1 + i] == 0):
+                timeout = 20 if case[1 + instance] != 0 else 5
+                try:
+                    gps_det_texts[instance] = self.wait_text(
+                        "GPS %u: specified as DroneCAN.*" % instance,
+                        regex=True,
+                        check_context=True,
+                        timeout=timeout,
+                    )
+                except AutoTestTimeoutException:
+                    gps_det_texts[instance] = None
+            gps1_det_text = gps_det_texts[1]
+            gps2_det_text = gps_det_texts[2]
 
             self.context_stop_collecting('STATUSTEXT')
             self.change_mode('LOITER')
@@ -14311,7 +14322,8 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.user_takeoff(alt_min=30)
 
         # send vehicle to global position target
-        location = self.home_relative_loc_ne(n=300, e=0)
+        target_alt = 30
+        location = self.home_relative_loc_neu(300, 0, target_alt)
         target_typemask = MAV_POS_TARGET_TYPE_MASK.POS_ONLY
         self.mav.mav.set_position_target_global_int_send(
             0, # timestamp
@@ -14321,7 +14333,7 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             target_typemask | MAV_POS_TARGET_TYPE_MASK.LAST_BYTE, # target typemask as pos only
             int(location.lat * 1e7), # lat
             int(location.lng * 1e7), # lon
-            30, # alt
+            target_alt, # alt
             0, # vx
             0, # vy
             0, # vz
@@ -14745,8 +14757,8 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
     def RTL_TO_RALLY(self, target_system=1, target_component=1):
         '''Check RTL to rally point'''
         self.wait_ready_to_arm()
-        rally_loc = self.home_relative_loc_ne(50, -25)
         rally_alt = 37
+        rally_loc = self.home_relative_loc_neu(50, -25, rally_alt)
         items = [
             self.mav.mav.mission_item_int_encode(
                 target_system,
@@ -14774,7 +14786,7 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         })
         self.takeoff(10)
         self.change_mode('RTL')
-        self.wait_location(rally_loc)
+        self.wait_location(rally_loc, height_accuracy=None)
         self.assert_altitude(rally_alt, relative=True)
         self.progress("Ensuring we're descending")
         self.wait_altitude(20, 25, relative=True)
@@ -14806,8 +14818,8 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         '''test that AHRS applies accel bias correctly'''
         self.change_mode('LOITER')
         self.wait_ready_to_arm()
-        here = self.mav.location(relative_alt=True)
-        hereabs = self.mav.location()
+        takeoff_alt = 10
+        target = self.home_relative_loc_neu(0, 0, takeoff_alt)
         self.set_parameters({
             "AHRS_EKF_TYPE": 10,
 
@@ -14816,8 +14828,8 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             "SIM_ACC3_BIAS_X": 1,
 
             "PLND_ENABLED": 1,
-            "SIM_PLD_LAT": here.lat,
-            "SIM_PLD_LON": here.lng,
+            "SIM_PLD_LAT": target.lat,
+            "SIM_PLD_LON": target.lng,
             "SIM_PLD_HEIGHT": 0,
             "SIM_PLD_ALT_LMT": 15,
             "SIM_PLD_DIST_LMT": 10,
@@ -14827,12 +14839,13 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.set_parameter("SIM_SONAR_SCALE", 12)
         self.reboot_sitl()
 
-        self.takeoff(10, mode='LOITER')
+        self.takeoff(takeoff_alt, mode='LOITER')
 
         self.run_auxfunc(39, 2)  # enable precision loiter
         WaitAndMaintainLocation(
             self,
-            hereabs,
+            target,
+            height_accuracy=5,  # takeoff only promises alt_min-1..alt_min+max_err(=5)
             fn=lambda : self.precision_loiter_to_pos(0, 0, 10, True),
             fn_interval=0.1,
             minimum_duration=10,
@@ -16159,8 +16172,10 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             minimum_duration=20,
         )
         self.wait_groundspeed(0, 0.5, timeout=15)
-        self.set_rc(2, 1500)
-        self.do_RTL()
+        # a forced reboot rather than an RTL: the RTL (at speedup 1)
+        # proves nothing further, and set_home requires a post-test
+        # reboot anyway
+        self.reboot_sitl(force=True)
 
     def MAV_CMD_SET_EKF_SOURCE_SET(self):
         '''test setting of source sets using mavlink command'''

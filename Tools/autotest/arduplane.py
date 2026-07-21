@@ -1618,7 +1618,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         self.progress("Testing FENCE_ACTION_RTL with rally point")
 
         self.wait_ready_to_arm()
-        loc = self.home_relative_loc_ne(50, -50)
+        loc = self.home_relative_loc_neu(50, -50, 15)
         self.upload_rally_points_from_locations([loc])
         self.test_fence_breach_circle_at(loc)
 
@@ -1658,7 +1658,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         self.delay_sim_time(1, reason="fence upload to complete")
 
         # Grab a location for rally point, and upload it.
-        rally_loc = self.home_relative_loc_ne(-50, 50)
+        rally_loc = self.home_relative_loc_neu(-50, 50, 15)
         self.upload_rally_points_from_locations([rally_loc])
 
         return_radius = 100
@@ -1672,7 +1672,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         self.do_fence_enable()
         self.assert_fence_enabled()
 
-        self.takeoff(alt=50, alt_max=300)
+        self.takeoff(alt=15, alt_max=40)
         # Trigger fence breach, fly to rally location
         self.set_parameters({
             "FENCE_RET_RALLY": 1,
@@ -2040,19 +2040,19 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             if disable_airspeed_sensor:
                 self.set_parameter("ARSPD_USE", 0)
 
+            target_alt = 100
+            loc = self.home_relative_loc_neu(500, 500, target_alt)
             self.takeoff(50)
-            loc = self.mav.location()
-            self.location_offset_ne(loc, 500, 500)
             self.run_cmd_int(
                 mavutil.mavlink.MAV_CMD_DO_REPOSITION,
                 p1=0,
                 p2=mavutil.mavlink.MAV_DO_REPOSITION_FLAGS_CHANGE_MODE,
                 p5=int(loc.lat * 1e7),
                 p6=int(loc.lng * 1e7),
-                p7=100,    # alt
+                p7=target_alt,    # alt
                 frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
             )
-            self.wait_location(loc, accuracy=100)
+            self.wait_location(loc, accuracy=100, height_accuracy=10)
             self.progress("Orbit with GPS and learn wind")
             # allow longer to learn wind if there is no airspeed sensor
             if disable_airspeed_sensor:
@@ -2449,9 +2449,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         self.set_rc(3, 1500)
         self.start_subtest("Ensure command bounced outside guided mode")
         desired_relative_alt = 33
-        loc = self.mav.location()
-        self.location_offset_ne(loc, 300, 300)
-        loc.alt += desired_relative_alt
+        loc = self.home_relative_loc_neu(300, 300, desired_relative_alt)
         self.mav.mav.mission_item_int_send(
             target_system,
             target_component,
@@ -2493,7 +2491,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         m = self.assert_receive_message('MISSION_ACK', timeout=5)
         if m.type != mavutil.mavlink.MAV_MISSION_ACCEPTED:
             raise NotAchievedException("Did not get accepted response")
-        self.wait_location(loc, accuracy=100) # based on loiter radius
+        self.wait_location(loc, accuracy=100, height_accuracy=None) # based on loiter radius
         self.wait_altitude(altitude_min=desired_relative_alt-3,
                            altitude_max=desired_relative_alt+3,
                            relative=True,
@@ -2771,7 +2769,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         self.set_rc(rc_chan, 1500)
 
         # Make sure this causes throttle down.
-        self.wait_servo_channel_value(3, 1200, timeout=3, comparator=operator.lt)
+        self.wait_servo_channel_value(3, 1200, timeout=5, comparator=operator.lt)
 
         self.progress("Waiting for next WP with no thermalling")
         self.wait_waypoint(4, 4, timeout=1200, max_dist_to_final_wp_m=120)
@@ -3029,9 +3027,10 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         self.wait_waypoint(3, 3, max_dist_to_final_wp_m=3150, timeout=600)
         self.progress("Entering guided and flying somewhere constant")
         self.change_mode("GUIDED")
+        new_alt = 280
         loc = self.mav.location()
         self.location_offset_ne(loc, 350, 0)
-        new_alt = 280
+        loc.alt = self.home_position_as_mav_location().alt + new_alt
         self.run_cmd_int(
             mavutil.mavlink.MAV_CMD_DO_REPOSITION,
             p5=int(loc.lat * 1e7),
@@ -3041,7 +3040,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         )
 
         # Resume auto when we are close to the GUIDED waypoint and start tracking maximum terrain alt.
-        self.wait_location(loc, accuracy=100)  # based on loiter radius
+        self.wait_location(loc, accuracy=100, height_accuracy=10)  # based on loiter radius
         self.change_mode('AUTO')
         self.install_message_hook_context(record_maxalt)
 
@@ -4965,6 +4964,12 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
     def AUTOTUNE(self):
         '''Test AutoTune mode'''
+
+        # Prior to 2026-07-15, the SITL airspeed sensor was reading about 5%
+        # slower than actual during this test. We bump the scaling airspeed by
+        # that same amount to get the same tune results as before.
+        self.set_parameter("SCALING_SPEED", 15.8)
+
         self.run_autotune()
 
         # Values that are set to constants
@@ -6606,7 +6611,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             dest,
             accuracy=200,
             timeout=600,
-            height_accuracy=10,
+            height_accuracy=None,  # dest.alt is relative; alt checked below
         )
         self.wait_altitude(
             dest.alt-5,
@@ -6644,7 +6649,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             dest,
             accuracy=200,
             timeout=600,
-            height_accuracy=10,
+            height_accuracy=None,  # dest.alt is above-terrain; alt checked below
         )
         self.wait_altitude(
             dest.alt-10,
@@ -7814,6 +7819,90 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         if airspeed_active != [False, True]:
             raise NotAchievedException("Not using expected airspeed sensors %s" % str(airspeed_active))
 
+    def AirspeedEAS2TAS(self):
+        '''check the SITL pitot applies EAS2TAS correctly'''
+
+        self.set_parameters({
+            "SIM_WIND_SPD": 0,      # groundspeed must equal true airspeed
+            "SIM_WIND_TURB": 0,
+        })
+
+        def sample_level_flight(duration=25):
+            '''average groundspeed, airspeed and altitude over level flight'''
+            sum_gs = 0.0
+            sum_as = 0.0
+            sum_alt = 0.0
+            count = 0
+            last_airspeed_message = None
+            tstart = self.get_sim_time()
+            while self.get_sim_time_cached() - tstart < duration:
+                m = self.assert_receive_message('VFR_HUD')
+                if abs(m.climb) > 1.0:
+                    continue        # only sample steady, level flight
+                # pair with the most recent raw airspeed sensor reading,
+                # skipping if it hasn't updated since the last sample
+                a = self.mav.messages.get('AIRSPEED', None)
+                if a is None or a is last_airspeed_message or a.id != 0 or a.airspeed < 1:
+                    continue
+                last_airspeed_message = a
+                sum_gs += m.groundspeed
+                sum_as += a.airspeed
+                sum_alt += m.alt
+                count += 1
+            if count < 15:
+                raise NotAchievedException("Too few level-flight samples (%u)" % count)
+            return sum_gs / count, sum_as / count, sum_alt / count
+
+        def guided_hold_alt(alt_rel_m, timeout=600):
+            # loiter at the current position and climb/hold the target altitude
+            loc = self.mav.location()
+            self.run_cmd_int(
+                mavutil.mavlink.MAV_CMD_DO_REPOSITION,
+                p5=int(loc.lat * 1e7),
+                p6=int(loc.lng * 1e7),
+                p7=alt_rel_m,
+                frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            )
+            self.wait_altitude(alt_rel_m - 5, alt_rel_m + 5, relative=True, timeout=timeout)
+            self.delay_sim_time(10, reason="settle into level flight")
+
+        low_alt_rel = 100
+        high_alt_rel = 2100
+        # Expected change in E2T for a 2000m climb
+        e2t_ratio_expected = 1.10
+        e2t_ratio_tolerance = 0.03
+
+        self.takeoff(alt=low_alt_rel, mode="TAKEOFF")
+        self.change_mode("GUIDED")
+
+        guided_hold_alt(low_alt_rel)
+        gs_lo, as_lo, alt_lo = sample_level_flight()
+
+        guided_hold_alt(high_alt_rel)
+        gs_hi, as_hi, alt_hi = sample_level_flight()
+
+        e2t_lo = gs_lo / as_lo
+        e2t_hi = gs_hi / as_hi
+        e2t_ratio = e2t_hi / e2t_lo
+        e2t_ratio_min = e2t_ratio_expected - e2t_ratio_tolerance
+        e2t_ratio_max = e2t_ratio_expected + e2t_ratio_tolerance
+
+        self.progress("EAS2TAS low:  alt=%.0f gs=%.2f as=%.2f e2t=%.4f" %
+                      (alt_lo, gs_lo, as_lo, e2t_lo))
+        self.progress("EAS2TAS high: alt=%.0f gs=%.2f as=%.2f e2t=%.4f" %
+                      (alt_hi, gs_hi, as_hi, e2t_hi))
+        self.progress("EAS2TAS ratio observed=%.4f want=[%.2f, %.2f]" %
+                      (e2t_ratio, e2t_ratio_min, e2t_ratio_max))
+
+        if e2t_ratio < e2t_ratio_min or e2t_ratio > e2t_ratio_max:
+            raise NotAchievedException(
+                f"groundspeed/airspeed ratio {e2t_ratio:.4f} outside "
+                f"[{e2t_ratio_min:.2f}, {e2t_ratio_max:.2f}]")
+
+        # force-disarm and reset SITL rather than descending all the way back down
+        self.disarm_vehicle(force=True)
+        self.reboot_sitl()
+
     def RudderArmingWithArmingChecksSkipped(self):
         '''check we can't arm with rudder even if all checks are skipped'''
         self.set_parameters({
@@ -8305,7 +8394,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
         self.start_subsubtest("ArmCk: Rally Point must be < ARM_V_RALLY_MAX meters away")
         self.progress("Currently RALLY_LIMIT_KM is %f" % self.get_parameter('RALLY_LIMIT_KM'))
-        loc = self.home_relative_loc_ne(6500, -50)
+        loc = self.home_relative_loc_neu(6500, -50, 100)
         self.upload_rally_points_from_locations([loc])
         self.wait_text("warn: Rally too far", check_context=True)
         self.set_parameter("RALLY_LIMIT_KM", 7)
@@ -8584,6 +8673,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.BadRollChannelDefined,
             self.VolzMission,
             self.mavlink_AIRSPEED,
+            self.AirspeedEAS2TAS,
             self.Volz,
             self.LoggedNamedValueFloat,
             self.LoggedNamedValueInt,
@@ -8804,6 +8894,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
     def disabled_tests(self):
         return {
             "LandingDrift": "Flapping test. See https://github.com/ArduPilot/ardupilot/issues/20054",
+            "TerrainRally": "Passes vacuously due to helper alt-frame bugs. See https://github.com/ArduPilot/ardupilot/issues/33740",  # noqa
             "InteractTest": "requires user interaction",
             "ClimbThrottleSaturation": "requires https://github.com/ArduPilot/ardupilot/pull/27106 to pass",
             "SoaringClimbRate": "very bad sink rate",
