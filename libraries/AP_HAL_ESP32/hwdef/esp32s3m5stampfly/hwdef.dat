@@ -72,11 +72,18 @@ define HAL_BATTMON_INA3221_SHUNT_CONV_TIME_SEL HAL_BATTMON_INA3221_CONV_TIME_415
 define HAL_BATTMON_INA3221_BUS_CONV_TIME_SEL HAL_BATTMON_INA3221_CONV_TIME_4156US
 define HAL_BATTMON_INA3221_AVG_MODE_SEL HAL_BATTMON_INA3221_AVG_MODE_16
 
-# 2 use udp, 1 use tcp...  for udp,client needs to connect as UDPCL in missionplanner etc to 192.168.4.1 port 14550
+# 2 use udp, 1 use tcp.  Use --extra-hwdef with a local, untracked hwdef file
+# to enable station mode with private Wi-Fi credentials.
 define HAL_ESP32_WIFI 2
 
+# Public default: create an ESP32 access point.  Do not commit private hotspot
+# credentials here.
+define WIFI_STATION 0
 define WIFI_SSID "ardupilot123"
 define WIFI_PWD "ardupilot123"
+define WIFI_CHANNEL 1
+define WIFI_HOSTNAME "ardupilot123"
+define WIFI_STA_POWER_SAVE WIFI_PS_NONE
 
 # rcin on what pin? enable AP_RCPROTOCOL_ENABLED below if using
 # currently on another unmapped pin

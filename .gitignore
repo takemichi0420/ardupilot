@@ -118,6 +118,10 @@ GTAGS
 /.history
 Parameters.html
 Parameters.md
+
+# Local M5Stamp Fly hwdef overrides can contain private Wi-Fi credentials.
+/libraries/AP_HAL_ESP32/hwdef/esp32s3m5stampfly/diagnostic.hwdef
+/libraries/AP_HAL_ESP32/hwdef/esp32s3m5stampfly/local.hwdef
 Parameters.rst
 Parameters.wiki
 ParameterMetaDataBackup.xml
