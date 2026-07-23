@@ -26,6 +26,10 @@
     #define AP_MOTORS_PARAM_PREFIX "MOT_"
 #endif
 
+#ifndef AP_MOTORS_SPOOLUP_BLOCK_ENABLED
+#define AP_MOTORS_SPOOLUP_BLOCK_ENABLED HAL_WITH_ESC_TELEM
+#endif
+
 extern const AP_HAL::HAL& hal;
 
 // parameters for the motor class
@@ -725,10 +729,15 @@ void AP_MotorsMulticopter::output_logic()
                 _spin_up_ratio = 1.0f;
                 if (!_spin_up_complete) {
                     // Spin up is complete.
-                    // Enable spoolup block to hold the aircraft in GROUND_IDLE.
-                    // Main code should start checks when the block is enabled and remove the lock when ready.
+                    // Enable spoolup block only on builds/boards that have a
+                    // matching takeoff_check() path. Boards without ESC/RPM
+                    // takeoff checks must not remain stuck at ground idle.
                     _spin_up_complete = true;
+#if AP_MOTORS_SPOOLUP_BLOCK_ENABLED
                     set_spoolup_block(true);
+#else
+                    set_spoolup_block(false);
+#endif
                 }
             }
             if (_spin_up_complete && !get_spoolup_block()) {

@@ -1,11 +1,19 @@
 # drone specific settings
 FRAME_CLASS 1
+FRAME_TYPE 1 # X frame
 MOT_PWM_TYPE 3 # brushed motor PWM
+MOT_PWM_MIN 1000
+MOT_PWM_MAX 2000
+MOT_SPIN_MAX 1.0
 RC_SPEED 32000 # as fast as ardupilot supports (more would be nice)
 LOG_BACKEND_TYPE 2 # mavlink logging
 ARMING_SKIPCHK 1024 # disable logging check (in the event log rx is not up)
 LOG_DISARMED 1
 SCHED_LOOP_RATE 150 # flash won't go faster :(
+SERIAL0_PROTOCOL 2 # USB console MAVLink2
+SERIAL0_BAUD 115
+SERIAL1_PROTOCOL 2 # Wi-Fi UDP MAVLink2
+SERIAL1_BAUD 115
 
 # onboard optical flow and rangefinder
 FLOW_TYPE 2 # Pixart PMW3901

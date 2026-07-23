@@ -90,6 +90,14 @@ static_assert(SOC_MCPWM_GENERATORS_PER_OPERATOR >= SOC_MCPWM_COMPARATORS_PER_OPE
 
 #define SERVO_DEFAULT_FREQ_HZ 50 // the rest of ArduPilot assumes this!
 
+#ifndef HAL_ESP32_FORCE_BRUSHED_RCOUT
+#define HAL_ESP32_FORCE_BRUSHED_RCOUT 0
+#endif
+
+#ifndef HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ
+#define HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ 32000
+#endif
+
 #define MAX_CHANNELS ARRAY_SIZE(outputs_pins)
 static_assert(MAX_CHANNELS < 12, "overrunning _pending and safe_pwm"); // max for current chips
 static_assert(MAX_CHANNELS < 32, "overrunning bitfields");
@@ -206,6 +214,12 @@ void RCOutput::set_freq(uint32_t chmask, uint16_t freq_hz)
     if (!_initialized) {
         return;
     }
+
+#if HAL_ESP32_FORCE_BRUSHED_RCOUT
+    if (chmask != 0) {
+        freq_hz = HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ;
+    }
+#endif
 
     for (auto &group : pwm_group_list) {
         if ((group.ch_mask & chmask) != 0) { // group has channels to set?
@@ -349,6 +363,18 @@ void RCOutput::set_group_mode(pwm_group &group)
 
 void RCOutput::set_output_mode(uint32_t mask, const enum output_mode mode)
 {
+#if HAL_ESP32_FORCE_BRUSHED_RCOUT
+    static bool brushed_notice_sent;
+    const enum output_mode selected_mode = (mode == MODE_PWM_NONE) ? mode : MODE_PWM_BRUSHED;
+    if (!brushed_notice_sent && mode != selected_mode) {
+        printf("RCOutput: forcing brushed PWM output at %u Hz for this board\n",
+               (unsigned)HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ);
+        brushed_notice_sent = true;
+    }
+#else
+    const enum output_mode selected_mode = mode;
+#endif
+
     while (mask) {
         uint8_t chan = __builtin_ffs(mask)-1;
         if (!_initialized || chan >= MAX_CHANNELS) {
@@ -356,7 +382,12 @@ void RCOutput::set_output_mode(uint32_t mask, const enum output_mode mode)
         }
 
         pwm_group &group = *pwm_chan_list[chan].group;
-        group.current_mode = mode;
+        group.current_mode = selected_mode;
+#if HAL_ESP32_FORCE_BRUSHED_RCOUT
+        if (selected_mode == MODE_PWM_BRUSHED) {
+            group.rc_frequency = HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ;
+        }
+#endif
         set_group_mode(group);
 
         // acknowledge the setting of any channels sharing this group
