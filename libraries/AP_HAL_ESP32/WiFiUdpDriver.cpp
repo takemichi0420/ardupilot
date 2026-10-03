@@ -375,8 +375,8 @@ void WiFiUdpDriver::initialize_wifi()
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    hal.console->printf("WiFi softAP init finished. SSID: %s password: %s channel: %d\n",
-                        wifi_config.ap.ssid, wifi_config.ap.password, wifi_config.ap.channel);
+    hal.console->printf("WiFi softAP init finished. SSID: %s channel: %d\n",
+                        wifi_config.ap.ssid, wifi_config.ap.channel);
 
 /*
 	Acting as a Station (WiFi Client)

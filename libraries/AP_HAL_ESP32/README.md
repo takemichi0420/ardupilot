@@ -478,7 +478,7 @@ esptool.py --chip esp32 --baud 921600 --before default_reset --after hard_reset 
 [22:51:20:964] I (301) wifi: Init static rx buffer num: 2
 [22:51:20:969] I (305) wifi: Init dynamic rx buffer num: 16
 [22:51:21:701] <0x1b>[0;32mI (1049) phy: phy_version: 4100, 6fa5e27, Jan 25 2019, 17:02:06, 0, 0<0x1b>[0m
-[22:51:21:710] I (1050) wifi: mode : softAP (24:0a:c4:32:48:f5)
+[22:51:21:710] I (1050) wifi: mode : softAP (<DEVICE_MAC>)
 [22:51:21:712] I (1051) wifi: Init max length of beacon: 752/752
 [22:51:21:716] I (1054) wifi: Init max length of beacon: 752/752
 [22:51:22:023] spi device constructed SPI:BMP280:0:2

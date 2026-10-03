@@ -294,8 +294,8 @@ void WiFiDriver::initialize_wifi()
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    hal.console->printf("WiFi softAP init finished. SSID: %s password: %s channel: %d\n",
-                        wifi_config.ap.ssid, wifi_config.ap.password, wifi_config.ap.channel);
+    hal.console->printf("WiFi softAP init finished. SSID: %s channel: %d\n",
+                        wifi_config.ap.ssid, wifi_config.ap.channel);
 
 /*
 	Acting as a Station (WiFi Client)
@@ -347,11 +347,11 @@ void WiFiDriver::initialize_wifi()
     /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
      * happened. */
     if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "connected to ap SSID: %s password: %s",
-                 wifi_config.sta.ssid, wifi_config.sta.password);
+        ESP_LOGI(TAG, "connected to ap SSID: %s",
+                 wifi_config.sta.ssid);
     } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(TAG, "Failed to connect to SSID: %s, password: %s",
-                 wifi_config.sta.ssid, wifi_config.sta.password);
+        ESP_LOGI(TAG, "Failed to connect to SSID: %s",
+                 wifi_config.sta.ssid);
     } else {
         ESP_LOGE(TAG, "UNEXPECTED EVENT");
     }
