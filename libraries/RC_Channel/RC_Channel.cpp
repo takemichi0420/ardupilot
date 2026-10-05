@@ -312,6 +312,16 @@ bool RC_Channel::update(void)
         return false;
     }
 
+#if AP_RC_AUX_DIAGNOSTICS
+    if (ch_in == 4) {
+        static int last_raw = -1, last_radio = -1;
+        if (last_raw != raw_radio_in || last_radio != radio_in) {
+            last_raw = raw_radio_in; last_radio = radio_in;
+            hal.console->printf("[RC5-UPDATE] hal=%d radio=%d override=%u\n",
+                int(raw_radio_in), int(radio_in), unsigned(has_override()));
+        }
+    }
+#endif
     if (type_in == ControlType::RANGE) {
         control_in = pwm_to_range();
     } else {
@@ -1014,8 +1024,44 @@ bool RC_Channel::read_aux()
 #endif  // AP_VIDEOTX_ENABLED
     }
 
-    AuxSwitchPos new_position;
-    if (!read_3pos_switch(new_position)) {
+    AuxSwitchPos new_position = AuxSwitchPos::MIDDLE;
+    const bool position_valid = read_3pos_switch(new_position);
+#if AP_RC_AUX_DIAGNOSTICS
+    const auto before = switch_state;
+    const auto trace = [&](bool completed) {
+        if (ch_in != 4) {
+            return;
+        }
+        const uint32_t now = AP_HAL::millis();
+        const uint16_t hal_pwm = hal.rcin->read(ch_in);
+        static int16_t last_pwm = -1, last_hal = -1, last_option = -1;
+        static int last_current = -2, last_candidate = -2;
+        static bool last_initialised;
+        static uint32_t last_log_ms;
+        if (!completed && last_pwm == get_radio_in() && last_hal == hal_pwm &&
+            last_option == option.get() && last_initialised == switch_state.initialised &&
+            last_current == switch_state.current_position && last_candidate == switch_state.debounce_position &&
+            (now - last_log_ms < 500 || switch_state.current_position == int(new_position))) {
+            return;
+        }
+        last_pwm = get_radio_in(); last_hal = hal_pwm; last_option = option.get();
+        last_initialised = switch_state.initialised;
+        last_current = switch_state.current_position; last_candidate = switch_state.debounce_position;
+        last_log_ms = now;
+        hal.console->printf("[RC5-AUX] hal=%u radio=%d option=%d read3=%u candidate=%s init=%u->%u current=%d->%d debounce=%d->%d edge=%lu->%lu now=%lu elapsed=%lu completed=%u\n",
+            unsigned(hal_pwm), int(get_radio_in()), int(option.get()), unsigned(position_valid),
+            !position_valid ? "INVALID" : new_position == AuxSwitchPos::HIGH ? "HIGH" : new_position == AuxSwitchPos::LOW ? "LOW" : "MIDDLE",
+            unsigned(before.initialised), unsigned(switch_state.initialised),
+            int(before.current_position), int(switch_state.current_position),
+            int(before.debounce_position), int(switch_state.debounce_position),
+            (unsigned long)before.last_edge_time_ms, (unsigned long)switch_state.last_edge_time_ms,
+            (unsigned long)now, (unsigned long)(now - switch_state.last_edge_time_ms), unsigned(completed));
+    };
+#endif
+    if (!position_valid) {
+#if AP_RC_AUX_DIAGNOSTICS
+        trace(false);
+#endif
         return false;
     }
 
@@ -1027,9 +1073,23 @@ bool RC_Channel::read_aux()
         }
     }
 
-    if (!debounce_completed((int8_t)new_position)) {
+    const bool completed = debounce_completed((int8_t)new_position);
+#if AP_RC_AUX_DIAGNOSTICS
+    trace(completed);
+#endif
+    if (!completed) {
         return false;
     }
+
+#if AP_RC_AUX_DIAGNOSTICS
+    if (ch_in == 4 && _option == AUX_FUNC::ARMDISARM) {
+        hal.console->printf("[RC-AUX-DIAG] RC%u pwm=%u option=%u position=%d\n",
+                            unsigned(ch_in + 1),
+                            unsigned(get_radio_in()),
+                            unsigned(option.get()),
+                            int(new_position));
+    }
+#endif
 
 #if AP_RC_CHANNEL_AUX_FUNCTION_STRINGS_ENABLED
     // announce the change to the GCS:
@@ -1040,7 +1100,17 @@ bool RC_Channel::read_aux()
 #endif
 
     // debounced; undertake the action:
+#if AP_RC_AUX_DIAGNOSTICS
+    if (ch_in == 4) {
+        hal.console->printf("[RC5-AUX] run_aux_function enter position=%d\n", int(new_position));
+    }
+    const bool handled = run_aux_function(_option, new_position, AuxFuncTrigger::Source::RC, ch_in);
+    if (ch_in == 4) {
+        hal.console->printf("[RC5-AUX] run_aux_function handled=%u\n", unsigned(handled));
+    }
+#else
     run_aux_function(_option, new_position, AuxFuncTrigger::Source::RC, ch_in);
+#endif
     return true;
 }
 
@@ -1071,17 +1141,41 @@ bool RC_Channel::init_position_on_first_radio_read(AUX_FUNC func) const
 
 void RC_Channel::do_aux_function_armdisarm(const AuxSwitchPos ch_flag)
 {
+#if AP_RC_AUX_DIAGNOSTICS
+    if (ch_in == 4) {
+        hal.console->printf("[RC5-AUX] ARMDISARM position=%d throttle_pwm=%d throttle_control=%d\n",
+            int(ch_flag), int(rc().get_throttle_channel().get_radio_in()), int(rc().get_throttle_channel().get_control_in()));
+    }
+#endif
     // arm or disarm the vehicle
     switch (ch_flag) {
-    case AuxSwitchPos::HIGH:
+    case AuxSwitchPos::HIGH: {
+#if AP_RC_AUX_DIAGNOSTICS
+        hal.console->printf("[RC-AUX-DIAG] ARM requested checks=1\n");
+        const bool result = AP::arming().arm(AP_Arming::Method::AUXSWITCH, true);
+        hal.console->printf("[RC-AUX-DIAG] ARM result=%s armed=%u\n",
+                            result ? "OK" : "REJECTED",
+                            unsigned(AP::arming().is_armed()));
+#else
         AP::arming().arm(AP_Arming::Method::AUXSWITCH, true);
+#endif
         break;
+    }
     case AuxSwitchPos::MIDDLE:
         // nothing
         break;
-    case AuxSwitchPos::LOW:
+    case AuxSwitchPos::LOW: {
+#if AP_RC_AUX_DIAGNOSTICS
+        hal.console->printf("[RC-AUX-DIAG] DISARM requested\n");
+        const bool result = AP::arming().disarm(AP_Arming::Method::AUXSWITCH);
+        hal.console->printf("[RC-AUX-DIAG] DISARM result=%s armed=%u\n",
+                            result ? "OK" : "REJECTED",
+                            unsigned(AP::arming().is_armed()));
+#else
         AP::arming().disarm(AP_Arming::Method::AUXSWITCH);
+#endif
         break;
+    }
     }
 }
 

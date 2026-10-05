@@ -2,6 +2,11 @@
 
 #include <AP_HAL/AP_HAL_Boards.h>
 
+// Temporary, RC5-only bench diagnostics; disabled in normal builds.
+#ifndef AP_RC_AUX_DIAGNOSTICS
+#define AP_RC_AUX_DIAGNOSTICS 0
+#endif
+
 #ifndef AP_RC_CHANNEL_ENABLED
 #define AP_RC_CHANNEL_ENABLED 1
 #endif

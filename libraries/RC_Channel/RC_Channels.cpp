@@ -218,7 +218,28 @@ bool RC_Channels::has_active_overrides()
 // read_aux_switches - checks aux switch positions and invokes configured actions
 void RC_Channels::read_aux_all()
 {
-    if (!has_valid_input()) {
+    const bool valid_input = has_valid_input();
+#if AP_RC_AUX_DIAGNOSTICS
+    static uint32_t last_aux_diag_ms;
+    static int last_pwm = -1, last_option = -1, last_mode = -1;
+    static bool last_valid, last_seen;
+    const uint32_t now_ms = AP_HAL::millis();
+    RC_Channel *rc5 = channel(4);
+    const int pwm = rc5 == nullptr ? 0 : rc5->get_radio_in();
+    const int opt = rc5 == nullptr ? -1 : rc5->option.get();
+    const int mode = flight_mode_channel_number();
+    const bool seen = has_ever_seen_rc_input();
+    if (pwm != last_pwm || opt != last_option || mode != last_mode || valid_input != last_valid || seen != last_seen || now_ms - last_aux_diag_ms >= 5000) {
+        last_pwm = pwm; last_option = opt; last_mode = mode; last_valid = valid_input; last_seen = seen;
+        last_aux_diag_ms = now_ms;
+        hal.console->printf("[RC-AUX-TASK-DIAG] valid=%u seen=%u rc5=%d option=%d FLTMODE_CH=%d conflict=%u\n",
+                            unsigned(valid_input),
+                            unsigned(seen), pwm, opt, mode,
+                            unsigned(flight_mode_channel_conflicts_with_rc_option()));
+    }
+#endif
+
+    if (!valid_input) {
         // exit immediately when no RC input
         return;
     }
