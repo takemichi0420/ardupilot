@@ -153,10 +153,7 @@ int16_t scale_axis(uint16_t raw, uint16_t bias, bool invert)
 uint16_t scale_throttle(uint16_t raw, uint16_t bias)
 {
     const int16_t signed_throttle = scale_axis(raw, bias, true);
-    if (signed_throttle <= 0) {
-        return 0;
-    }
-    return uint16_t(signed_throttle);
+    return uint16_t((int32_t(signed_throttle) + 1000) / 2);
 }
 
 bool calibrate_center()
@@ -287,7 +284,7 @@ void setup()
     Serial.print("[ATOMJOY-ESPNOW] local_mac=");
     Serial.println(WiFi.macAddress());
     Serial.printf("[ATOMJOY-ESPNOW] channel=%u\n", espnow_channel);
-    Serial.println("[ATOMJOY-ESPNOW] mapping roll=right_x pitch=right_y throttle=left_y(center-low) yaw=left_x");
+    Serial.println("[ATOMJOY-ESPNOW] mapping roll=right_x pitch=right_y throttle=left_y(center) yaw=left_x");
 
     const esp_err_t init_result = esp_now_init();
     if (init_result != ESP_OK) {

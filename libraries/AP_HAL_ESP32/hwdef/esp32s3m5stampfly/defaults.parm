@@ -24,6 +24,16 @@ RNGFND1_MIN 0.05
 RNGFND1_MAX 3.6
 
 # mavlink RC control
+# RC5 is dedicated to ARM/DISARM and RC6 to the Atom JoyStick mode selector.
+# Existing saved parameters must be updated explicitly using rc5_aux.parm.
+FLTMODE_CH 6
+FLTMODE1 0 # STABILIZE at RC6=1165
+FLTMODE3 2 # ALT_HOLD at RC6=1425
+FLTMODE4 2 # ALT_HOLD alternate position at RC6=1555
+FLTMODE5 5 # LOITER alternate position at RC6=1685
+FLTMODE6 5 # LOITER at RC6=1815
+RC5_OPTION 153
+RC6_OPTION 0
 FS_THR_ENABLE 0 # not wanted for mavlink control
 RC1_MIN 1101 # avoid calibration needed warning
 RC_OPTIONS 96 # ignore rpy stick positions during arming, nice for crap controllers

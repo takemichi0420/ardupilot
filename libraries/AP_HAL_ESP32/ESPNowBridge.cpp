@@ -1,5 +1,6 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL_ESP32/ESPNowBridge.h>
+#include "ESPNowButtons.h"
 #include <AP_HAL_ESP32/ESPNowProtocol.h>
 #include <AP_HAL_ESP32/RCInput.h>
 #include <AP_HAL_ESP32/Scheduler.h>
@@ -67,6 +68,11 @@ uint32_t last_control_ms;
 uint32_t last_rx_log_ms;
 uint32_t last_control_log_ms;
 bool control_active;
+ESPNowButtons button_events;
+uint16_t last_rc5 = 1500;
+uint16_t last_rc6 = ESPNowButtons::RC6_STABILIZE;
+uint16_t last_control_sequence;
+uint8_t last_control_mac[6];
 
 bool init_nvs()
 {
@@ -238,7 +244,7 @@ void set_rc_input(const uint16_t *channels, uint8_t channel_count)
     rcin->set_espnow_input(channels, channel_count, 255, 255);
 }
 
-void set_rc_neutral_throttle_low()
+void set_rc_safe(uint16_t rc6, bool reset_flight_mode)
 {
     const uint16_t channels[8] {
         1500,
@@ -246,11 +252,14 @@ void set_rc_neutral_throttle_low()
         1000,
         1500,
         1500,
-        1500,
+        rc6,
         1500,
         1500,
     };
     set_rc_input(channels, 8);
+    button_events.reset(AP_HAL::millis(), reset_flight_mode);
+    last_rc5 = 1500;
+    last_rc6 = rc6;
 }
 
 void apply_control_rcin(const AP_ESPNowControlPacket &packet, const uint8_t *mac)
@@ -258,29 +267,78 @@ void apply_control_rcin(const AP_ESPNowControlPacket &packet, const uint8_t *mac
     char mac_text[18];
     format_mac(mac, mac_text, sizeof(mac_text));
 
+    const uint32_t now_ms = AP_HAL::millis();
+    const bool same_source = memcmp(last_control_mac, mac, sizeof(last_control_mac)) == 0;
+    const uint16_t sequence_delta = uint16_t(packet.sequence - last_control_sequence);
+    const bool link_expired = !control_active || uint32_t(now_ms - last_control_ms) >= HAL_ESP32_ESPNOW_RCIN_TIMEOUT_MS;
+    if (!link_expired && same_source && sequence_delta == 0) {
+        return; // A duplicate cannot extend a hold or keep the link alive.
+    }
+    // A backwards sequence (excluding normal uint16 wrap) may be a reboot.
+    // Re-establish the release gate even if reboot took less than the timeout.
+    if (link_expired || !same_source || sequence_delta > 0x7fffU) {
+        button_events.reset(now_ms);
+        last_rc5 = 1500;
+        hal.console->printf("[ESPNOW-BUTTON] link start/recovery RC5=1500 RC6=%u wait release\n",
+                            unsigned(button_events.get_rc6()));
+    }
+    const ESPNowButtons::State previous_state = button_events.get_state();
+    const uint16_t throttle_pwm = throttle_to_pwm(packet.z);
+    const bool arm_allowed = throttle_pwm <= ESPNowButtons::ARM_THROTTLE_MAX_PWM;
+    const ESPNowButtons::Outputs outputs = button_events.update(packet.buttons, now_ms, arm_allowed);
+    if ((packet.buttons & (ESPNowButtons::LEFT | ESPNowButtons::RIGHT)) ==
+        (ESPNowButtons::LEFT | ESPNowButtons::RIGHT) &&
+        previous_state != ESPNowButtons::State::WAIT_RELEASE) {
+        hal.console->printf("[ESPNOW-BUTTON] L+R cancel, wait release\n");
+    }
+    if (button_events.get_state() == ESPNowButtons::State::R_ARM_BLOCKED &&
+        previous_state != ESPNowButtons::State::R_ARM_BLOCKED) {
+        hal.console->printf("[ESPNOW-BUTTON] R long: ARM blocked RC3=%u; release R and lower throttle below %u\n",
+                            unsigned(throttle_pwm),
+                            unsigned(ESPNowButtons::ARM_THROTTLE_MAX_PWM));
+    }
+    if (outputs.rc5 != last_rc5) {
+        hal.console->printf("[ESPNOW-BUTTON] %s RC5=%u state=%u now=%lu\n",
+            outputs.rc5 == ESPNowButtons::RC5_HIGH ? "R 1s: ARM" :
+            outputs.rc5 == ESPNowButtons::RC5_LOW ? "R short: DISARM" : "AUX MIDDLE",
+            unsigned(outputs.rc5), unsigned(button_events.get_state()), (unsigned long)now_ms);
+        last_rc5 = outputs.rc5;
+    }
+    if (outputs.rc6 != last_rc6) {
+        hal.console->printf("[ESPNOW-BUTTON] %s RC6=%u state=%u now=%lu\n",
+            ESPNowButtons::is_alt_hold(outputs.rc6) ? "L short: ALT_HOLD" :
+            ESPNowButtons::is_loiter(outputs.rc6) ? "L 1s: LOITER" : "STABILIZE",
+            unsigned(outputs.rc6), unsigned(button_events.get_state()), (unsigned long)now_ms);
+        last_rc6 = outputs.rc6;
+    }
+
     const uint16_t channels[8] {
         axis_to_pwm(packet.x),
         axis_to_pwm(packet.y),
-        throttle_to_pwm(packet.z),
+        throttle_pwm,
         axis_to_pwm(packet.r),
-        1500,
-        1500,
+        outputs.rc5,
+        outputs.rc6,
         1500,
         1500,
     };
     set_rc_input(channels, 8);
-    last_control_ms = AP_HAL::millis();
+    last_control_ms = now_ms;
+    last_control_sequence = packet.sequence;
+    memcpy(last_control_mac, mac, sizeof(last_control_mac));
     control_active = true;
 
     if (should_log(last_control_log_ms)) {
         hal.console->printf(
-            "[ESPNOW] control rcin mac=%s seq=%u rc1=%u rc2=%u rc3=%u rc4=%u buttons=0x%04x\n",
+            "[ESPNOW] control rcin mac=%s seq=%u rc1=%u rc2=%u rc3=%u rc4=%u rc5=%u rc6=%u buttons=0x%04x\n",
             mac_text,
             unsigned(packet.sequence),
             unsigned(channels[0]),
             unsigned(channels[1]),
             unsigned(channels[2]),
             unsigned(channels[3]),
+            unsigned(channels[4]),
+            unsigned(channels[5]),
             unsigned(packet.buttons));
     }
 }
@@ -296,9 +354,11 @@ void stop_rc_input_if_stale()
         return;
     }
 
-    set_rc_neutral_throttle_low();
+    // Preserve the existing link-loss RC output, including RC6=1500. The
+    // configured FLTMODE4 determines the resulting flight mode until recovery.
+    set_rc_safe(1500, false);
     control_active = false;
-    hal.console->printf("[ESPNOW] rcin failsafe: no packets for %u ms\n",
+    hal.console->printf("[ESPNOW] rcin failsafe: no packets for %u ms; RC3=1000 RC5=1500 RC6=1500, no AUX DISARM\n",
                         unsigned(HAL_ESP32_ESPNOW_RCIN_TIMEOUT_MS));
 }
 
@@ -326,7 +386,26 @@ void worker(void *arg)
 
     ESPNOWFrame frame {};
 
+#if HAL_ESP32_ESPNOW_RCIN_ENABLED
+    // The ESP32 RCInput thread is initialised just after this worker starts.
+    // Keep publishing the safe frame until RCInput confirms that it accepted
+    // RC5 and RC6; no received button can be handled before that point.
+    do {
+        set_rc_safe(ESPNowButtons::RC6_STABILIZE, true);
+        if (hal.rcin->read(4) == ESPNowButtons::RC5_CENTER &&
+            hal.rcin->read(5) == ESPNowButtons::RC6_STABILIZE) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    } while (true);
+    hal.console->printf("[ESPNOW-BUTTON] startup RC5=1500 RC6=1165/STABILIZE wait release\n");
+#endif
+
     while (true) {
+#if HAL_ESP32_ESPNOW_RCIN_ENABLED
+        // Invalid packets must not keep the link alive by keeping the queue busy.
+        stop_rc_input_if_stale();
+#endif
         if (xQueueReceive(receive_queue, &frame, pdMS_TO_TICKS(100)) != pdTRUE) {
 #if HAL_ESP32_ESPNOW_RCIN_ENABLED
             stop_rc_input_if_stale();

@@ -1,0 +1,14 @@
+# Apply to M5Stamp Fly, not Atom JoyStick. Saved values need explicit loading.
+# Reserve RC5 for ARM/DISARM and RC6 for the three requested flight modes.
+FLTMODE_CH 6
+FLTMODE1 0
+FLTMODE3 2
+FLTMODE4 2
+FLTMODE5 5
+FLTMODE6 5
+RC5_OPTION 153
+RC5_MIN 1000
+RC5_TRIM 1500
+RC5_MAX 2000
+RC5_REVERSED 0
+RC6_OPTION 0
