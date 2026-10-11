@@ -1,7 +1,10 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Wire.h>
+#include <atomic>
 #include <string.h>
+
+#include <M5Unified.h>
 
 #include "ESPNowProtocol.h"
 #include "esp_now.h"
@@ -24,6 +27,7 @@ constexpr uint8_t reg_battery_2 = 0x62;
 
 constexpr uint8_t espnow_channel = AP_ESPNOW_DEFAULT_CHANNEL;
 constexpr uint32_t send_interval_ms = 50;
+constexpr uint32_t display_interval_ms = 200;
 constexpr int32_t axis_half_range = 2048;
 constexpr int32_t axis_deadzone = 40;
 constexpr uint16_t button_left = 1U << 0;
@@ -37,6 +41,16 @@ uint8_t peer_mac[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 uint16_t sequence;
 uint32_t last_send_ms;
 uint32_t last_status_ms;
+uint32_t last_display_ms;
+enum class TxResult : uint32_t { NONE, OK, FAIL };
+// Callback outcomes and immediate API errors are separate event counts,
+// not a combined per-packet failure total.
+std::atomic<uint32_t> tx_success_count {0};
+std::atomic<uint32_t> tx_failure_count {0};
+std::atomic<uint32_t> send_error_count {0};
+std::atomic<TxResult> tx_last_result {TxResult::NONE};
+bool i2c_ready;
+bool lcd_ready;
 bool ready;
 
 struct AtomJoyState {
@@ -67,9 +81,105 @@ void print_mac(const uint8_t *mac)
 
 void on_send(const uint8_t *mac, esp_now_send_status_t status)
 {
+    if (status == ESP_NOW_SEND_SUCCESS) {
+        tx_success_count.fetch_add(1, std::memory_order_relaxed);
+        tx_last_result.store(TxResult::OK, std::memory_order_relaxed);
+    } else {
+        tx_failure_count.fetch_add(1, std::memory_order_relaxed);
+        tx_last_result.store(TxResult::FAIL, std::memory_order_relaxed);
+    }
+
     Serial.print("[ATOMJOY-ESPNOW] send_cb peer=");
     print_mac(mac);
     Serial.printf(" status=%s\n", status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
+}
+
+void draw_display_labels()
+{
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.setTextSize(1);
+    M5.Display.setCursor(8, 6);
+    M5.Display.print("ATOM JOYSTICK");
+    M5.Display.setCursor(4, 24);
+    M5.Display.print("I2C INIT:");
+    M5.Display.setCursor(4, 38);
+    M5.Display.print("ESP-NOW:");
+    M5.Display.setCursor(4, 52);
+    M5.Display.print("TX LAST:");
+    M5.Display.setCursor(4, 66);
+    M5.Display.print("Channel:");
+    M5.Display.setCursor(4, 80);
+    M5.Display.print("TX OK:");
+    M5.Display.setCursor(4, 94);
+    M5.Display.print("TX FAIL:");
+    M5.Display.setCursor(4, 108);
+    M5.Display.print("SEND ERR:");
+}
+
+void prepare_display_value(uint8_t y, uint32_t color)
+{
+    M5.Display.fillRect(64, y, 64, 12, TFT_BLACK);
+    M5.Display.setTextColor(color, TFT_BLACK);
+    M5.Display.setCursor(64, y);
+}
+
+void update_display(bool force = false)
+{
+    if (!lcd_ready) {
+        return;
+    }
+
+    const uint32_t now_ms = millis();
+    if (!force && now_ms - last_display_ms < display_interval_ms) {
+        return;
+    }
+    last_display_ms = now_ms;
+
+    const uint32_t tx_ok = tx_success_count.load(std::memory_order_relaxed);
+    const uint32_t tx_fail = tx_failure_count.load(std::memory_order_relaxed);
+    const uint32_t send_errors = send_error_count.load(std::memory_order_relaxed);
+    const TxResult tx_last = tx_last_result.load(std::memory_order_relaxed);
+    static bool displayed;
+    static uint32_t displayed_tx_ok;
+    static uint32_t displayed_tx_fail;
+    static uint32_t displayed_send_errors;
+    static TxResult displayed_tx_last = TxResult::NONE;
+    const bool initial = force || !displayed;
+
+    M5.Display.setTextSize(1);
+    if (initial) {
+        // These are setup results, not runtime I2C health or peer connectivity.
+        prepare_display_value(24, i2c_ready ? TFT_GREEN : TFT_RED);
+        M5.Display.print(i2c_ready ? "OK" : "FAIL");
+        prepare_display_value(38, ready ? TFT_GREEN : TFT_RED);
+        M5.Display.print(ready ? "READY" : "FAIL");
+        prepare_display_value(66, TFT_WHITE);
+        M5.Display.print(espnow_channel);
+    }
+    if (initial || tx_last != displayed_tx_last) {
+        prepare_display_value(52, tx_last == TxResult::NONE ? TFT_WHITE :
+                              tx_last == TxResult::OK ? TFT_GREEN : TFT_RED);
+        M5.Display.print(tx_last == TxResult::NONE ? "--" :
+                         tx_last == TxResult::OK ? "OK" : "FAIL");
+    }
+    if (initial || tx_ok != displayed_tx_ok) {
+        prepare_display_value(80, TFT_WHITE);
+        M5.Display.print(tx_ok);
+    }
+    if (initial || tx_fail != displayed_tx_fail) {
+        prepare_display_value(94, TFT_WHITE);
+        M5.Display.print(tx_fail);
+    }
+    if (initial || send_errors != displayed_send_errors) {
+        prepare_display_value(108, TFT_WHITE);
+        M5.Display.print(send_errors);
+    }
+    displayed = true;
+    displayed_tx_ok = tx_ok;
+    displayed_tx_fail = tx_fail;
+    displayed_send_errors = send_errors;
+    displayed_tx_last = tx_last;
 }
 
 bool read_register(uint8_t reg, uint8_t *buffer, size_t length)
@@ -234,6 +344,9 @@ void send_packet()
 
     AP_ESPNowControlPacket packet = make_packet(state);
     const esp_err_t result = esp_now_send(peer_mac, reinterpret_cast<uint8_t *>(&packet), sizeof(packet));
+    if (result != ESP_OK) {
+        send_error_count.fetch_add(1, std::memory_order_relaxed);
+    }
 
     Serial.printf(
         "[ATOMJOY-ESPNOW] send seq=%u x=%d y=%d z=%u r=%d buttons=0x%04x L=%u R=%u LS=%u RS=%u result=%s\n",
@@ -272,8 +385,21 @@ void setup()
 
     Serial.println("[ATOMJOY-ESPNOW] boot");
 
+    // Initialise only the built-in AtomS3 display.  Deliberately avoid
+    // M5.begin(), which also configures M5Unified I2C and other peripherals.
+    // The existing TwoWire(1), Wi-Fi and ESP-NOW setup below remain untouched.
+    lcd_ready = M5.Display.begin();
+    if (lcd_ready) {
+        M5.Display.setRotation(0);
+        M5.Display.setBrightness(96);
+        draw_display_labels();
+    } else {
+        Serial.println("[ATOMJOY-ESPNOW] LCD init failed");
+    }
+
     atom_joy_wire.begin(atom_joy_sda, atom_joy_scl, atom_joy_i2c_frequency);
-    if (!calibrate_center()) {
+    i2c_ready = calibrate_center();
+    if (!i2c_ready) {
         Serial.println("[ATOMJOY-ESPNOW] joystick not found at I2C address 0x59");
     }
 
@@ -289,6 +415,7 @@ void setup()
     const esp_err_t init_result = esp_now_init();
     if (init_result != ESP_OK) {
         Serial.printf("[ATOMJOY-ESPNOW] esp_now_init failed: %d\n", init_result);
+        update_display(true);
         return;
     }
 
@@ -296,6 +423,7 @@ void setup()
 
     if (!add_peer()) {
         Serial.println("[ATOMJOY-ESPNOW] add broadcast peer failed");
+        update_display(true);
         return;
     }
 
@@ -303,6 +431,7 @@ void setup()
     print_mac(peer_mac);
     Serial.println();
     ready = true;
+    update_display(true);
 }
 
 void loop()
@@ -316,6 +445,8 @@ void loop()
     if (now_ms - last_send_ms >= send_interval_ms) {
         last_send_ms = now_ms;
         send_packet();
+        // Limit drawing to send slots, after the packet send attempt.
+        update_display();
     }
 
     if (now_ms - last_status_ms >= 1000) {
