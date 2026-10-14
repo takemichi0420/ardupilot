@@ -26,6 +26,7 @@
 
 #include "driver/rtc_io.h"
 
+#include <math.h>
 #include <stdio.h>
 
 #include "esp_log.h"
@@ -95,7 +96,11 @@ static_assert(SOC_MCPWM_GENERATORS_PER_OPERATOR >= SOC_MCPWM_COMPARATORS_PER_OPE
 #endif
 
 #ifndef HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ
-#define HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ 32000
+#define HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ 32000U
+#endif
+
+#ifndef HAL_ESP32_BRUSHED_RCOUT_MAX_FREQ
+#define HAL_ESP32_BRUSHED_RCOUT_MAX_FREQ 32000U
 #endif
 
 #define MAX_CHANNELS ARRAY_SIZE(outputs_pins)
@@ -136,7 +141,10 @@ void RCOutput::init()
             // set up the group to use the default frequency and mode
             group.mcpwm_group_id = mcpwm_group_id;
             group.h_timer = nullptr; // no timer yet
+            group.requested_frequency = SERVO_DEFAULT_FREQ_HZ;
             group.rc_frequency = SERVO_DEFAULT_FREQ_HZ;
+            group.period_ticks = 0;
+            group.config_logged = false;
             group.ch_mask = 0;
             group.current_mode = MODE_PWM_NORMAL;
 
@@ -193,38 +201,57 @@ void RCOutput::init()
 // constrain the frequency for the group given its current mode and return the
 // corresponding period for the timer
 uint32_t RCOutput::constrain_freq(pwm_group &group) {
-    // clamp frequency to keep period between roughly 1000 (preserving output
-    // resolution) and UINT16_MAX (hardware limit)
-    unsigned int curr_freq = group.rc_frequency;
+    // Keep the period within the 16-bit hardware limit. The default brushed
+    // ceiling preserves resolution; experimental ceilings trade it for frequency.
+    const uint32_t curr_freq = group.rc_frequency;
+    group.requested_frequency = curr_freq;
     switch (group.current_mode) {
     case MODE_PWM_BRUSHED:
-        group.rc_frequency = constrain_value(curr_freq, 650U, 32000U);
-        return BRUSH_TIMEBASE_RESOLUTION_HZ/group.rc_frequency;
+        {
+            const uint32_t max_freq = constrain_value(
+                (uint32_t)HAL_ESP32_BRUSHED_RCOUT_MAX_FREQ,
+                (uint32_t)650U,
+                (uint32_t)BRUSH_TIMEBASE_RESOLUTION_HZ);
+            group.rc_frequency = constrain_value(curr_freq, (uint32_t)650U, max_freq);
+            group.period_ticks = MAX(1U, (uint32_t)(BRUSH_TIMEBASE_RESOLUTION_HZ / group.rc_frequency));
+            return group.period_ticks;
+        }
 
     case MODE_PWM_NORMAL:
     default: // i.e. MODE_PWM_NONE
         // greater than 400 doesn't leave enough time for the down edge
-        group.rc_frequency = constrain_value(curr_freq, 16U, 400U);
-        return SERVO_TIMEBASE_RESOLUTION_HZ/group.rc_frequency;
+        group.rc_frequency = constrain_value(curr_freq, (uint32_t)16U, (uint32_t)400U);
+        group.period_ticks = MAX(1U, (uint32_t)(SERVO_TIMEBASE_RESOLUTION_HZ / group.rc_frequency));
+        return group.period_ticks;
     }
 }
 
 void RCOutput::set_freq(uint32_t chmask, uint16_t freq_hz)
 {
+    WITH_SEMAPHORE(_pwm_sem);
     if (!_initialized) {
         return;
     }
 
+    uint32_t requested_freq_hz = freq_hz;
+
 #if HAL_ESP32_FORCE_BRUSHED_RCOUT
     if (chmask != 0) {
-        freq_hz = HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ;
+        requested_freq_hz = (uint32_t)HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ;
     }
 #endif
 
     for (auto &group : pwm_group_list) {
         if ((group.ch_mask & chmask) != 0) { // group has channels to set?
-            group.rc_frequency = freq_hz; // set frequency and corresponding period
+            const bool brushed = group.current_mode == MODE_PWM_BRUSHED;
+            if (brushed) {
+                begin_group_update(group);
+            }
+            group.rc_frequency = requested_freq_hz; // set frequency and corresponding period
             ESP_ERROR_CHECK(mcpwm_timer_set_period(group.h_timer, constrain_freq(group)));
+            if (brushed) {
+                end_group_update(group);
+            }
 
             // disallow changing frequency of this group if it is greater than the default
             if (group.rc_frequency > SERVO_DEFAULT_FREQ_HZ || group.current_mode > MODE_PWM_NORMAL) {
@@ -358,11 +385,37 @@ void RCOutput::set_group_mode(pwm_group &group)
     // oh, and connect the operator, in case we are using a new timer (it can
     // only connect to one timer so this will clear out any old connection)
     ESP_ERROR_CHECK(mcpwm_operator_connect_timer(group.h_oper, group.h_timer));
+
+#if HAL_ESP32_FORCE_BRUSHED_RCOUT
+    if (group.current_mode == MODE_PWM_BRUSHED) {
+        log_brushed_pwm_config(group);
+    }
+#endif
 }
 
+void RCOutput::log_brushed_pwm_config(pwm_group &group)
+{
+    if (group.config_logged || group.period_ticks == 0) {
+        return;
+    }
+    group.config_logged = true;
+
+    const float actual_freq = (float)BRUSH_TIMEBASE_RESOLUTION_HZ / group.period_ticks;
+    const float resolution_bits = log2f((float)group.period_ticks);
+    printf("ESP32 brushed PWM: pwm_group=%u ch_mask=0x%lx requested_freq=%lu applied_freq=%lu timebase_hz=%lu period_ticks=%lu actual_freq=%.1fHz resolution_bits=%.2f\n",
+           (unsigned)(&group - pwm_group_list),
+           (unsigned long)group.ch_mask,
+           (unsigned long)group.requested_frequency,
+           (unsigned long)group.rc_frequency,
+           (unsigned long)BRUSH_TIMEBASE_RESOLUTION_HZ,
+           (unsigned long)group.period_ticks,
+           (double)actual_freq,
+           (double)resolution_bits);
+}
 
 void RCOutput::set_output_mode(uint32_t mask, const enum output_mode mode)
 {
+    WITH_SEMAPHORE(_pwm_sem);
 #if HAL_ESP32_FORCE_BRUSHED_RCOUT
     static bool brushed_notice_sent;
     const enum output_mode selected_mode = (mode == MODE_PWM_NONE) ? mode : MODE_PWM_BRUSHED;
@@ -382,6 +435,11 @@ void RCOutput::set_output_mode(uint32_t mask, const enum output_mode mode)
         }
 
         pwm_group &group = *pwm_chan_list[chan].group;
+        const bool brushed_transition = group.current_mode == MODE_PWM_BRUSHED ||
+                                        selected_mode == MODE_PWM_BRUSHED;
+        if (brushed_transition) {
+            begin_group_update(group);
+        }
         group.current_mode = selected_mode;
 #if HAL_ESP32_FORCE_BRUSHED_RCOUT
         if (selected_mode == MODE_PWM_BRUSHED) {
@@ -389,6 +447,9 @@ void RCOutput::set_output_mode(uint32_t mask, const enum output_mode mode)
         }
 #endif
         set_group_mode(group);
+        if (brushed_transition) {
+            end_group_update(group);
+        }
 
         // acknowledge the setting of any channels sharing this group
         for (chan=0; chan<MAX_CHANNELS; chan++) {
@@ -401,16 +462,20 @@ void RCOutput::set_output_mode(uint32_t mask, const enum output_mode mode)
 
 uint16_t RCOutput::get_freq(uint8_t chan)
 {
+    WITH_SEMAPHORE(_pwm_sem);
     if (!_initialized || chan >= MAX_CHANNELS) {
         return SERVO_DEFAULT_FREQ_HZ;
     }
 
     pwm_group &group = *pwm_chan_list[chan].group;
-    return group.rc_frequency;
+    // The shared HAL interface cannot represent experimental >65535 Hz PWM.
+    // This is a saturated report, not the physical frequency; use the startup log.
+    return group.rc_frequency > 65535U ? 65535U : group.rc_frequency;
 }
 
 void RCOutput::enable_ch(uint8_t chan)
 {
+    WITH_SEMAPHORE(_pwm_sem);
     if (!_initialized || chan >= MAX_CHANNELS) {
         return;
     }
@@ -423,6 +488,7 @@ void RCOutput::enable_ch(uint8_t chan)
 
 void RCOutput::disable_ch(uint8_t chan)
 {
+    WITH_SEMAPHORE(_pwm_sem);
     if (!_initialized || chan >= MAX_CHANNELS) {
         return;
     }
@@ -503,6 +569,7 @@ void RCOutput::timer_tick(void)
 
 void RCOutput::write_int(uint8_t chan, uint16_t period_us)
 {
+    WITH_SEMAPHORE(_pwm_sem);
     if (!_initialized || chan >= MAX_CHANNELS) {
         return;
     }
@@ -520,20 +587,11 @@ void RCOutput::write_int(uint8_t chan, uint16_t period_us)
     }
     ch.value = period_us;
 
-    uint16_t compare_value;
+    uint32_t compare_value;
     switch(ch.group->current_mode) {
-    case MODE_PWM_BRUSHED: {
-        float duty = 0;
-        if (period_us <= _esc_pwm_min) {
-            duty = 0;
-        } else if (period_us >= _esc_pwm_max) {
-            duty = 1;
-        } else {
-            duty = ((float)(period_us - _esc_pwm_min))/(_esc_pwm_max - _esc_pwm_min);
-        }
-        compare_value = duty*BRUSH_TIMEBASE_RESOLUTION_HZ/ch.group->rc_frequency;
+    case MODE_PWM_BRUSHED:
+        compare_value = brushed_compare_value(*ch.group, period_us);
         break;
-    }
 
     case MODE_PWM_NORMAL:
         compare_value = period_us;
@@ -546,6 +604,71 @@ void RCOutput::write_int(uint8_t chan, uint16_t period_us)
     }
 
     ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(ch.h_cmpr, compare_value));
+}
+
+uint32_t RCOutput::brushed_compare_value(const pwm_group &group, uint16_t period_us) const
+{
+    if (group.period_ticks == 0 || _esc_pwm_max <= _esc_pwm_min || period_us <= _esc_pwm_min) {
+        return 0;
+    }
+    if (period_us >= _esc_pwm_max) {
+        return group.period_ticks;
+    }
+
+    const uint32_t duty_range = uint32_t(_esc_pwm_max - _esc_pwm_min);
+    uint32_t compare_value;
+    if (group.rc_frequency <= 65535U) {
+        // Preserve the legacy float rounding on existing brushed boards.
+        const float duty = float(period_us - _esc_pwm_min) / duty_range;
+        compare_value = duty * BRUSH_TIMEBASE_RESOLUTION_HZ / group.rc_frequency;
+    } else {
+        // Experimental wide-frequency mode uses the integer timer period.
+        compare_value = (uint64_t(period_us - _esc_pwm_min) * group.period_ticks) / duty_range;
+    }
+    return MIN(compare_value, group.period_ticks);
+}
+
+void RCOutput::wait_group_period(const pwm_group &group)
+{
+    const uint32_t timebase = group.current_mode == MODE_PWM_BRUSHED ?
+                              BRUSH_TIMEBASE_RESOLUTION_HZ : SERVO_TIMEBASE_RESOLUTION_HZ;
+    // One complete period, rounded up, plus a tick of margin. This is a
+    // bounded wait for STOP_EMPTY / update_cmp_on_tez, not flight-safe retuning.
+    const uint32_t wait_us = (uint64_t(group.period_ticks) * 1000000U + timebase - 1U) / timebase;
+    hal.scheduler->delay_microseconds(wait_us + 1U);
+}
+
+void RCOutput::begin_group_update(pwm_group &group)
+{
+    // Force every pin in the shared timer group LOW before touching its timer.
+    // ESP_ERROR_CHECK aborts on failure; a later failure leaves this force active.
+    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        if (group.ch_mask & (1U << i)) {
+            ESP_ERROR_CHECK(mcpwm_generator_set_force_level(pwm_chan_list[i].h_gen, 0, true));
+        }
+    }
+    ESP_ERROR_CHECK(mcpwm_timer_start_stop(group.h_timer, MCPWM_TIMER_STOP_EMPTY));
+    wait_group_period(group);
+}
+
+void RCOutput::end_group_update(pwm_group &group)
+{
+    // Restore the saved PWM command through the normal safety override and
+    // the new period's mapping, while all outputs remain forced LOW.
+    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        if (group.ch_mask & (1U << i)) {
+            write_int(i, pwm_chan_list[i].value);
+        }
+    }
+    ESP_ERROR_CHECK(mcpwm_timer_start_stop(group.h_timer, MCPWM_TIMER_START_NO_STOP));
+    // The comparator is shadowed until timer zero. Keep LOW until that event
+    // has occurred after every compare write, including a recreated timer.
+    wait_group_period(group);
+    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        if (group.ch_mask & (1U << i)) {
+            ESP_ERROR_CHECK(mcpwm_generator_set_force_level(pwm_chan_list[i].h_gen, -1, true));
+        }
+    }
 }
 
 /*

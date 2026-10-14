@@ -22,6 +22,7 @@
 
 #include <AP_HAL/RCOutput.h>
 #include "HAL_ESP32_Namespace.h"
+#include "Semaphores.h"
 #include <AP_HAL/Util.h>
 
 #include "driver/gpio.h"
@@ -107,7 +108,10 @@ private:
         mcpwm_timer_handle_t h_timer;
         mcpwm_oper_handle_t h_oper;
 
+        uint32_t requested_frequency; // requested frequency before clamping
         uint32_t rc_frequency; // frequency in Hz
+        uint32_t period_ticks; // timer period derived from rc_frequency
+        bool config_logged; // startup diagnostic once per PWM group
         uint32_t ch_mask; // mask of channels in this group
         enum output_mode current_mode; // output mode (none, normal, brushed)
     };
@@ -127,6 +131,15 @@ private:
     uint32_t constrain_freq(pwm_group &group);
 
     void set_group_mode(pwm_group &group);
+
+    void log_brushed_pwm_config(pwm_group &group);
+
+    void begin_group_update(pwm_group &group);
+    void end_group_update(pwm_group &group);
+    void wait_group_period(const pwm_group &group);
+    uint32_t brushed_compare_value(const pwm_group &group, uint16_t period_us) const;
+
+    Semaphore _pwm_sem; // recursive: reconfiguration restores via write_int()
 
     void write_int(uint8_t chan, uint16_t period_us);
 

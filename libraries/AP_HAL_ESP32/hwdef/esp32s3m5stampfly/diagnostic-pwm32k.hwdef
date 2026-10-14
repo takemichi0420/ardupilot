@@ -1,0 +1,13 @@
+# M5Stamp Fly brushed PWM 32 kHz diagnostic build.
+#
+# This includes the local, gitignored diagnostic.hwdef so private Wi-Fi
+# credentials and local transport settings stay outside git.
+include diagnostic.hwdef
+
+undef HAL_ESP32_FORCE_BRUSHED_RCOUT
+undef HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ
+undef HAL_ESP32_BRUSHED_RCOUT_MAX_FREQ
+
+define HAL_ESP32_FORCE_BRUSHED_RCOUT 1
+define HAL_ESP32_FORCE_BRUSHED_RCOUT_FREQ 32000
+define HAL_ESP32_BRUSHED_RCOUT_MAX_FREQ 32000
