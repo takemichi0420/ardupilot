@@ -184,7 +184,7 @@ bool WiFiDriver::write_data()
 {
     for (unsigned short i = 0; i < WIFI_MAX_CONNECTION && socket_list[i] > -1; ++i) {
         int count = 0;
-        _write_mutex.take_blocking();
+        WITH_SEMAPHORE(_write_mutex);
         do {
             count = _writebuf.peekbytes(_buffer, sizeof(_buffer));
             if (count > 0) {
@@ -199,13 +199,11 @@ bool WiFiDriver::write_data()
                     close(socket_list[i]);
                     socket_list[i] = -1;
                     _state = INITIALIZED;
-                    _write_mutex.give();
                     return false;
                 }
             }
         } while (count > 0);
     }
-    _write_mutex.give();
     return true;
 }
 
