@@ -61,12 +61,7 @@ void Semaphore::take_blocking()
 
 bool Semaphore::take_nonblocking()
 {
-    bool ok = xSemaphoreTakeRecursive((QueueHandle_t)handle, 0) == pdTRUE;
-    if (ok) {
-        give();
-    }
-
-    return ok;
+    return xSemaphoreTakeRecursive((QueueHandle_t)handle, 0) == pdTRUE;
 }
 
 bool Semaphore::check_owner()
