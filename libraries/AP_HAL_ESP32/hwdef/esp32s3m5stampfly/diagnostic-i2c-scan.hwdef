@@ -1,0 +1,7 @@
+# One-shot internal I2C scan for the M5Stamp Fly.
+# The included local file supplies the current private Wi-Fi settings and is
+# intentionally gitignored. This file contains no credentials.
+include diagnostic.hwdef
+
+undef HAL_ESP32_I2C_DIAGNOSTICS
+define HAL_ESP32_I2C_DIAGNOSTICS 1

@@ -129,6 +129,8 @@ public:
             bool use_smbus = false,
             uint32_t timeout_ms=4) override;
 
+    static void scan_bus(uint8_t bus, const char *context);
+
     /*
       get mask of bus numbers for all configured I2C buses
      */

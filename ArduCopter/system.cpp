@@ -3,6 +3,10 @@
 #include <GCS_MAVLink/GCS.h>
 #include <stdio.h>
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_ESP32
+#include <AP_HAL_ESP32/I2CDevice.h>
+#endif
+
 #define copter_diag(fmt, args ...)  do { printf(fmt, ## args); printf("\n"); GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt, ## args); } while(0)
 
 /*****************************************************************************
@@ -145,6 +149,12 @@ void Copter::init_ardupilot()
 #if AP_RANGEFINDER_ENABLED
     // initialise rangefinder
     init_rangefinder();
+#endif
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_ESP32 && HAL_ESP32_I2C_DIAGNOSTICS
+    // Diagnostic builds only: scan the internal bus once after XSHUT-controlled
+    // rangefinders have completed detection and startup.
+    ESP32::I2CDeviceManager::scan_bus(0, "post-rangefinder-init");
 #endif
 
 #if HAL_PROXIMITY_ENABLED

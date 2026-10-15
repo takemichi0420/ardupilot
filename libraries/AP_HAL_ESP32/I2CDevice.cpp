@@ -19,12 +19,17 @@
 #include <GCS_MAVLink/GCS.h>
 #include <AP_HAL_ESP32/Semaphores.h>
 #include "Scheduler.h"
+#include "driver/gpio.h"
 #include <stdio.h>
 
 using namespace ESP32;
 
 #define MHZ (1000U*1000U)
 #define KHZ (1000U)
+
+#ifndef HAL_ESP32_I2C_DIAGNOSTICS
+#define HAL_ESP32_I2C_DIAGNOSTICS 0
+#endif
 
 #define esp32_i2c_diag(fmt, args ...)  do { printf(fmt, ## args); printf("\n"); GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt, ## args); } while(0)
 
@@ -188,6 +193,136 @@ I2CDeviceManager::get_device_ptr(uint8_t bus, uint8_t address,
                        (unsigned)bus, (unsigned)address);
     }
     return dev;
+}
+
+void I2CDeviceManager::scan_bus(uint8_t busnum, const char *context)
+{
+#if HAL_ESP32_I2C_DIAGNOSTICS
+    if (busnum >= ARRAY_SIZE(i2c_bus_desc)) {
+        printf("[I2C-SCAN] invalid bus=%u %s\n",
+               (unsigned)busnum,
+               context == nullptr ? "" : context);
+        return;
+    }
+
+    if (businfo[busnum].soft) {
+        printf("[I2C-SCAN] soft bus unsupported bus=%u %s\n",
+               (unsigned)busnum,
+               context == nullptr ? "" : context);
+        return;
+    }
+
+    auto &semaphore = businfo[busnum].semaphore;
+    // Allow one short transaction (the default device timeout is 4 ms) plus
+    // a scheduler tick. A busy bus is a reason to skip optional diagnostics.
+    static constexpr uint32_t lock_timeout_ms = 5;
+    if (!semaphore.take(lock_timeout_ms)) {
+        printf("[I2C-SCAN] bus=%u bus lock timeout; scan skipped\n", (unsigned)busnum);
+        return;
+    }
+
+    enum class ProbeResult : uint8_t { NOT_PROBED, FOUND, NOT_FOUND, TIMEOUT, ERROR };
+    ProbeResult results[0x78] {};
+    uint8_t found = 0;
+    uint8_t not_found = 0;
+    uint8_t timeouts = 0;
+    uint8_t errors = 0;
+    bool aborted = false;
+    printf("[I2C-SCAN] start bus=%u SDA=GPIO%d SCL=GPIO%d speed=%luHz %s\n",
+           (unsigned)busnum,
+           (int)i2c_bus_desc[busnum].sda,
+           (int)i2c_bus_desc[busnum].scl,
+           (unsigned long)businfo[busnum].bus_clock,
+           context == nullptr ? "" : context);
+
+    for (uint8_t addr = 0x08; addr < 0x78; addr++) {
+        // Address ACK probe only: no register, payload or read. Device state
+        // changes, including those caused by SDK bus recovery, are not ruled out.
+        i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+        if (cmd == nullptr) {
+            errors++;
+            results[addr] = ProbeResult::ERROR;
+            aborted = true;
+            printf("[I2C-SCAN] command allocation failed at 0x%02X; scan aborted\n",
+                   (unsigned)addr);
+            break;
+        }
+
+        const char *stage = "START";
+        esp_err_t err = i2c_master_start(cmd);
+        if (err == ESP_OK) {
+            stage = "address";
+            err = i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
+        }
+        if (err == ESP_OK) {
+            stage = "STOP";
+            err = i2c_master_stop(cmd);
+        }
+        if (err != ESP_OK) {
+            i2c_cmd_link_delete(cmd);
+            errors++;
+            results[addr] = ProbeResult::ERROR;
+            aborted = true;
+            printf("[I2C-SCAN] command construction failed at 0x%02X stage=%s err=%d; scan aborted\n",
+                   (unsigned)addr, stage, (int)err);
+            break;
+        }
+
+        err = i2c_master_cmd_begin(businfo[busnum].port, cmd, pdMS_TO_TICKS(5));
+        i2c_cmd_link_delete(cmd);
+
+        if (err == ESP_OK) {
+            results[addr] = ProbeResult::FOUND;
+            found++;
+            printf("[I2C-SCAN] found 0x%02X\n", (unsigned)addr);
+        } else if (err == ESP_FAIL) {
+            // In ESP-IDF 5.3.1, cmd_begin maps I2C_STATUS_ACK_ERROR to
+            // ESP_FAIL. Here only the address is sent, so this is an address
+            // NACK, not proof that no physical device is connected.
+            results[addr] = ProbeResult::NOT_FOUND;
+            not_found++;
+        } else {
+            if (err == ESP_ERR_TIMEOUT) {
+                results[addr] = ProbeResult::TIMEOUT;
+                timeouts++;
+                printf("[I2C-SCAN] probe timeout at 0x%02X; scan aborted\n", (unsigned)addr);
+            } else {
+                results[addr] = ProbeResult::ERROR;
+                errors++;
+                printf("[I2C-SCAN] driver error at 0x%02X err=%d; scan aborted\n",
+                       (unsigned)addr, (int)err);
+            }
+            // Leave SDK recovery to cmd_begin; do not keep probing a failed bus.
+            aborted = true;
+            break;
+        }
+    }
+
+    static constexpr uint8_t expected_addresses[] { 0x29, 0x40, 0x76 };
+    for (const uint8_t addr : expected_addresses) {
+        if (results[addr] != ProbeResult::FOUND) {
+            const char *status = "NOT PROBED";
+            switch (results[addr]) {
+            case ProbeResult::NOT_FOUND: status = "NOT FOUND (address NACK)"; break;
+            case ProbeResult::TIMEOUT: status = "TIMEOUT"; break;
+            case ProbeResult::ERROR: status = "ERROR"; break;
+            default: break;
+            }
+            printf("[I2C-SCAN] 0x%02X %s\n", (unsigned)addr, status);
+        }
+    }
+
+    printf("[I2C-SCAN] end bus=%u found=%u not_found=%u timeout=%u error=%u aborted=%u SDA=%d SCL=%d\n",
+           (unsigned)busnum,
+           (unsigned)found,
+           (unsigned)not_found,
+           (unsigned)timeouts,
+           (unsigned)errors,
+           (unsigned)aborted,
+           (int)gpio_get_level(i2c_bus_desc[busnum].sda),
+           (int)gpio_get_level(i2c_bus_desc[busnum].scl));
+    semaphore.give();
+#endif
 }
 
 /*

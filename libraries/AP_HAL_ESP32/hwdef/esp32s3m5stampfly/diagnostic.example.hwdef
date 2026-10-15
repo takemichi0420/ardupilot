@@ -4,8 +4,8 @@
 # Example build:
 #   ./waf configure --board esp32s3m5stampfly --extra-hwdef=libraries/AP_HAL_ESP32/hwdef/esp32s3m5stampfly/diagnostic.hwdef
 
-# Diagnostic build only. Do not use for flight.
-define HAL_ESP32_I2C_DIAGNOSTICS 1
+# Optional low-level I2C diagnostics. Leave disabled for flight-test builds.
+define HAL_ESP32_I2C_DIAGNOSTICS 0
 define HAL_BARO_ALLOW_INIT_NO_BARO
 
 # Join an iPhone Personal Hotspot instead of creating an ESP32 access point.
