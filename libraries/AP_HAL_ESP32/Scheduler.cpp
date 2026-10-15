@@ -532,16 +532,71 @@ void Scheduler::print_stats(void)
     // printf("loop_rate_hz: %d",get_loop_rate_hz());
 }
 
-// Run every 10s
+// Called at a fixed main-task point after callbacks->loop() and the existing
+// delay. Optional statistics measure completion-to-completion period, not loop
+// execution time. Reporting time is included in the next period sample.
 void Scheduler::print_main_loop_rate(void)
 {
+#ifndef HAL_ESP32_LOOP_RATE_DEBUG
+#define HAL_ESP32_LOOP_RATE_DEBUG 0
+#endif
+#if HAL_ESP32_LOOP_RATE_DEBUG
+    const uint64_t now_us = AP_HAL::micros64();
+    static uint64_t last_loop_us;
+    static bool have_last_loop;
+    static uint64_t window_period_count;
+    static uint64_t window_period_sum_us;
+    static uint64_t window_min_period_us;
+    static uint64_t window_max_period_us;
+
+    if (have_last_loop) {
+        const uint64_t period_us = now_us - last_loop_us;
+        if (window_period_count == 0) {
+            window_min_period_us = period_us;
+            window_max_period_us = period_us;
+        } else {
+            window_min_period_us = MIN(window_min_period_us, period_us);
+            window_max_period_us = MAX(window_max_period_us, period_us);
+        }
+        window_period_count++;
+        window_period_sum_us += period_us;
+    }
+    last_loop_us = now_us;
+    have_last_loop = true;
+#endif
+
+    // Preserve the existing loop-rate report regardless of the diagnostic flag.
     static int64_t last_run = 0;
     if (AP_HAL::millis64() - last_run > 10000) {
         last_run = AP_HAL::millis64();
-        // null pointer in here...
         const float actual_loop_rate = AP::scheduler().get_filtered_loop_rate_hz();
         const uint16_t expected_loop_rate = AP::scheduler().get_loop_rate_hz();
         hal.console->printf("loop_rate: actual: %fHz, expected: %uHz\n", actual_loop_rate, expected_loop_rate);
+
+#if HAL_ESP32_LOOP_RATE_DEBUG
+        if (window_period_count > 0) {
+            const double avg_period_us = double(window_period_sum_us) / double(window_period_count);
+            // A zero expected rate provides no nominal-period/lateness reference.
+            const double nominal_period_us = expected_loop_rate > 0 ? 1000000.0 / expected_loop_rate : 0.0;
+            const double max_late_us = expected_loop_rate > 0 && window_max_period_us > nominal_period_us ?
+                double(window_max_period_us) - nominal_period_us : 0.0;
+            hal.console->printf("loop_period: completion-to-completion expected_hz=%u nominal_period_us=%.1f "
+                                "avg_period_us=%.1f min_period_us=%llu max_period_us=%llu "
+                                "max_late_us=%.1f sample_count=%llu\n",
+                                expected_loop_rate,
+                                nominal_period_us,
+                                avg_period_us,
+                                (unsigned long long)window_min_period_us,
+                                (unsigned long long)window_max_period_us,
+                                max_late_us,
+                                (unsigned long long)window_period_count);
+
+            window_period_count = 0;
+            window_period_sum_us = 0;
+            window_min_period_us = 0;
+            window_max_period_us = 0;
+        }
+#endif
     }
 }
 
