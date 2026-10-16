@@ -23,6 +23,7 @@
 #include <GCS_MAVLink/GCS.h>
 #include "Scheduler.h"
 #include "Semaphores.h"
+#include "FlightLoadDiagnostics.h"
 #include <stdio.h>
 
 using namespace ESP32;
@@ -198,10 +199,19 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
     t.tx_buffer = send;
     t.rxlength = len*8;
     t.rx_buffer = recv;
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    const bool measure_pixart = device_desc.bus == 0 && device_desc.device == 1;
+    const uint32_t transaction_start_us = measure_pixart ? AP_HAL::micros() : 0;
+#endif
 #if HAL_ESP32_SPI_POLLING_TRANSACTIONS
     const esp_err_t err = spi_device_polling_transmit(handle, &t);
 #else
     const esp_err_t err = spi_device_transmit(handle, &t);
+#endif
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    if (measure_pixart) {
+        FlightLoadDiagnostics::pmw_spi_transaction(AP_HAL::micros() - transaction_start_us);
+    }
 #endif
     bool release_ok = true;
     if (acquired_here) {

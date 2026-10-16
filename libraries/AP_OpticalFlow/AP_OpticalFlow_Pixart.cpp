@@ -29,6 +29,7 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Math/crc.h>
 #include <AP_AHRS/AP_AHRS.h>
+#include <AP_HAL_ESP32/FlightLoadDiagnostics.h>
 #include <utility>
 #include "AP_OpticalFlow.h"
 #include "AP_OpticalFlow_Pixart_SROM.h"
@@ -290,6 +291,10 @@ void AP_OpticalFlow_Pixart::timer(void)
     if (AP_HAL::micros() - last_burst_us < 500) {
         return;
     }
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    const uint32_t callback_start_us = AP_HAL::micros();
+    ESP32::FlightLoadDiagnostics::pmw_callback_begin();
+#endif
     motion_burst();
     last_burst_us = AP_HAL::micros();
 
@@ -310,6 +315,10 @@ void AP_OpticalFlow_Pixart::timer(void)
         integral.last_frame_us = last_burst_us;
         integral.gyro += Vector2f(gyro.x, gyro.y) * dt;
     }
+
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    ESP32::FlightLoadDiagnostics::pmw_callback_end(AP_HAL::micros() - callback_start_us);
+#endif
 
 #if 0
     static uint32_t last_print_ms;

@@ -20,6 +20,7 @@
 #include "Semaphores.h"
 #include "AP_HAL_ESP32.h"
 #include "Scheduler.h"
+#include "FlightLoadDiagnostics.h"
 
 
 #include "freertos/FreeRTOS.h"
@@ -44,6 +45,9 @@ private:
     struct callback_info {
         struct callback_info *next;
         AP_HAL::Device::PeriodicCb cb;
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+        AP_HAL::Device *hal_device;
+#endif
         uint32_t period_usec;
         uint64_t next_usec;
     } *callbacks;

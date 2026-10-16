@@ -11,8 +11,27 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include <GCS_MAVLink/GCS.h>
+#include <AP_HAL_ESP32/FlightLoadDiagnostics.h>
 
 extern const AP_HAL::HAL &hal;
+
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+class VL53L3CXDiagnosticScope {
+public:
+    VL53L3CXDiagnosticScope() : start_us(AP_HAL::micros())
+    {
+        ESP32::FlightLoadDiagnostics::vl53_callback_begin();
+    }
+
+    ~VL53L3CXDiagnosticScope()
+    {
+        ESP32::FlightLoadDiagnostics::vl53_callback_end(AP_HAL::micros() - start_us);
+    }
+
+private:
+    const uint32_t start_us;
+};
+#endif
 
 #ifndef AP_RANGEFINDER_VL53L3CX_DIAG_GCS_TEXT_LIMIT
 #define AP_RANGEFINDER_VL53L3CX_DIAG_GCS_TEXT_LIMIT 0
@@ -337,6 +356,9 @@ AP_RangeFinder_VL53L3CX::ReadResult AP_RangeFinder_VL53L3CX::get_reading(RawRead
 
     uint8_t ready = 0;
     int status = VL53LX_GetMeasurementDataReady(&vl53_device, &ready);
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    ESP32::FlightLoadDiagnostics::vl53_data_ready(ready != 0);
+#endif
     if (status != VL53LX_ERROR_NONE) {
         return ReadResult::Error;
     }
@@ -415,6 +437,9 @@ void AP_RangeFinder_VL53L3CX::invalidate_readings()
 
 void AP_RangeFinder_VL53L3CX::timer()
 {
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    VL53L3CXDiagnosticScope diagnostic_scope;
+#endif
     RawReading reading {};
     const ReadResult read_result = get_reading(reading);
     if (read_result == ReadResult::NotReady) {

@@ -1,5 +1,7 @@
 #include "Copter.h"
 
+#include <AP_HAL_ESP32/FlightLoadDiagnostics.h>
+
 #define ARM_DELAY               20  // called at 10hz so 2 seconds
 #define DISARM_DELAY            20  // called at 10hz so 2 seconds
 #define LOST_VEHICLE_DELAY      10  // called at 10hz so 1 second
@@ -124,6 +126,9 @@ void Copter::motors_output_main()
     if (!using_rate_thread) {
         motors_output();
     }
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    ESP32::FlightLoadDiagnostics::set_spool_state(uint8_t(motors->get_spool_state()));
+#endif
 }
 
 // check for pilot stick input to trigger lost vehicle alarm

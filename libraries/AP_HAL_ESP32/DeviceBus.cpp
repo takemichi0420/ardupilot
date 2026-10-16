@@ -20,6 +20,7 @@
 
 #include "Scheduler.h"
 #include "Semaphores.h"
+#include "FlightLoadDiagnostics.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -59,7 +60,18 @@ void IRAM_ATTR DeviceBus::bus_thread(void *arg)
                     callback->next_usec += callback->period_usec;
                 }
                 // call it with semaphore held
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+                const bool is_pixart = callback->hal_device->bus_type() == AP_HAL::Device::BUS_TYPE_SPI &&
+                                       callback->hal_device->bus_num() == 0 &&
+                                       callback->hal_device->get_bus_address() == 1;
+                const uint32_t wait_start_us = is_pixart ? AP_HAL::micros() : 0;
+#endif
                 if (binfo->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+                    if (is_pixart) {
+                        FlightLoadDiagnostics::pmw_semaphore_wait(AP_HAL::micros() - wait_start_us);
+                    }
+#endif
                     callback->cb();
                     binfo->semaphore.give();
                 }
@@ -129,6 +141,9 @@ AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(uint32_t pe
         return nullptr;
     }
     callback->cb = cb;
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    callback->hal_device = _hal_device;
+#endif
     callback->period_usec = period_usec;
     callback->next_usec = AP_HAL::micros64() + period_usec;
 

@@ -18,6 +18,7 @@
 
 #include <AP_HAL/utility/sparse-endian.h>
 #include <AP_Math/AP_Math.h>
+#include <AP_HAL_ESP32/FlightLoadDiagnostics.h>
 
 #include "AP_InertialSensor_BMI270.h"
 
@@ -373,6 +374,9 @@ void AP_InertialSensor_BMI270::fifo_reset()
  */
 void AP_InertialSensor_BMI270::read_fifo(void)
 {
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    ESP32::FlightLoadDiagnostics::bmi_sample(AP_HAL::micros(), BACKEND_PERIOD_US);
+#endif
     // check for FIFO errors/overflow
     uint8_t err = 0;
     read_registers(BMI270_REG_ERR_REG, &err, 1);

@@ -19,6 +19,7 @@
 #include <GCS_MAVLink/GCS.h>
 #include <AP_HAL_ESP32/Semaphores.h>
 #include "Scheduler.h"
+#include "FlightLoadDiagnostics.h"
 #include "driver/gpio.h"
 #include <stdio.h>
 
@@ -103,6 +104,10 @@ bool I2CDevice::transfer(const uint8_t *send, uint32_t send_len,
     }
 
     bool result = false;
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    const uint32_t diagnostic_start_us = AP_HAL::micros();
+    uint8_t diagnostic_attempts = 0;
+#endif
     if (bus.soft) {
         uint8_t flag_wr = (recv_len == 0 || recv == nullptr) ? I2C_NOSTOP : 0;
         if (send_len != 0 && send != nullptr) {
@@ -141,6 +146,9 @@ bool I2CDevice::transfer(const uint8_t *send, uint32_t send_len,
         uint32_t timeout_ms = 1 + 16L * (send_len + recv_len) * 1000 / bus.bus_clock;
         timeout_ms = MAX(timeout_ms, _timeout_ms);
         for (int i = 0; !result && i < _retries; i++) {
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+            diagnostic_attempts++;
+#endif
             result = (i2c_master_cmd_begin(bus.port, cmd, pdMS_TO_TICKS(timeout_ms)) == ESP_OK);
             if (!result) {
                 i2c_reset_tx_fifo(bus.port);
@@ -150,6 +158,14 @@ bool I2CDevice::transfer(const uint8_t *send, uint32_t send_len,
 
         i2c_cmd_link_delete(cmd);
     }
+
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+    FlightLoadDiagnostics::vl53_i2c_transfer(
+        _address,
+        AP_HAL::micros() - diagnostic_start_us,
+        diagnostic_attempts > 0 ? diagnostic_attempts - 1 : 0,
+        recv != nullptr && recv_len > 0);
+#endif
 
     if (!result && !_transfer_failure_reported) {
         _transfer_failure_reported = true;

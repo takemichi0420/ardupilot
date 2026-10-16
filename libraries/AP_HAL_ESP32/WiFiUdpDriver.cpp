@@ -16,6 +16,7 @@
 #include <AP_HAL_ESP32/WiFiUdpDriver.h>
 #include <AP_Math/AP_Math.h>
 #include <AP_HAL_ESP32/Scheduler.h>
+#include <AP_HAL_ESP32/FlightLoadDiagnostics.h>
 
 #include <sys/param.h>
 #include "freertos/FreeRTOS.h"
@@ -499,10 +500,16 @@ void WiFiUdpDriver::_wifi_thread2(void *arg)
         FD_ZERO(&rfds);
         FD_SET(self->accept_socket, &rfds);
         int s = select(self->accept_socket + 1, &rfds, NULL, NULL, &tv);
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+        const uint32_t wifi_io_start_us = AP_HAL::micros();
+#endif
         if (s > 0 && FD_ISSET(self->accept_socket, &rfds)) {
             self->read_all();
         }
         self->write_data();
+#if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+        FlightLoadDiagnostics::wifi_io(AP_HAL::micros() - wifi_io_start_us);
+#endif
     }
 }
 
