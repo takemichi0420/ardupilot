@@ -349,6 +349,119 @@ RangeFinder::Status AP_RangeFinder_VL53L3CX::classify_target(uint8_t range_statu
     }
 }
 
+#if AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS
+// Developer output policy only; these values never affect sensor/control logic.
+#ifndef AP_RANGEFINDER_VL53L3CX_DIAG_REPORT_INTERVAL_MS
+#define AP_RANGEFINDER_VL53L3CX_DIAG_REPORT_INTERVAL_MS 1000
+#endif
+#ifndef AP_RANGEFINDER_VL53L3CX_DIAG_REPORT_LIMIT
+#define AP_RANGEFINDER_VL53L3CX_DIAG_REPORT_LIMIT 20
+#endif
+
+static uint32_t vl53l3cx_diagnostic_increment(uint32_t value)
+{
+    return value == UINT32_MAX ? value : value + 1;
+}
+
+void AP_RangeFinder_VL53L3CX::queue_diagnostic_locked(const DiagnosticRecord &record)
+{
+    if (diagnostic_emitted >= AP_RANGEFINDER_VL53L3CX_DIAG_REPORT_LIMIT) {
+        diagnostic_suppressed = vl53l3cx_diagnostic_increment(diagnostic_suppressed);
+        return;
+    }
+    if (!diagnostic_pending_valid) {
+        diagnostic_pending = record;
+        diagnostic_pending.occurrences = 1;
+        diagnostic_pending_valid = true;
+    } else if (diagnostic_pending.event == record.event &&
+               diagnostic_pending.operation == record.operation &&
+               diagnostic_pending.api_status == record.api_status &&
+               diagnostic_pending.previous_status == record.previous_status &&
+               diagnostic_pending.new_status == record.new_status &&
+               diagnostic_pending.object_count == record.object_count) {
+        diagnostic_pending.occurrences = vl53l3cx_diagnostic_increment(diagnostic_pending.occurrences);
+    } else {
+        // Keep the first unreported event, including while interval-limited.
+        diagnostic_suppressed = vl53l3cx_diagnostic_increment(diagnostic_suppressed);
+    }
+}
+
+void AP_RangeFinder_VL53L3CX::record_api_error(DiagnosticOperation operation, VL53LX_Error api_status)
+{
+    DiagnosticRecord record {};
+    record.event = DiagnosticEvent::API_ERROR;
+    record.operation = operation;
+    record.api_status = api_status;
+    WITH_SEMAPHORE(sem);
+    queue_diagnostic_locked(record);
+}
+
+void AP_RangeFinder_VL53L3CX::record_range_status(uint8_t range_status, uint8_t object_count)
+{
+    WITH_SEMAPHORE(sem);
+    // The first observation establishes a baseline, not a fictitious transition.
+    if (diagnostic_have_status && diagnostic_previous_status != range_status) {
+        DiagnosticRecord record {};
+        record.event = DiagnosticEvent::RANGE_STATUS_CHANGE;
+        record.previous_status = diagnostic_previous_status;
+        record.new_status = range_status;
+        record.object_count = object_count;
+        queue_diagnostic_locked(record);
+    }
+    diagnostic_previous_status = range_status;
+    diagnostic_have_status = true;
+}
+
+void AP_RangeFinder_VL53L3CX::service_diagnostics()
+{
+    // Called before update() takes its functional lock, never by a bus callback.
+    // Sample the clock and format/output only outside the backend semaphore.
+    const uint32_t now_ms = AP_HAL::millis();
+    DiagnosticRecord record;
+    uint32_t suppressed;
+    {
+        WITH_SEMAPHORE(sem);
+        if (!diagnostic_pending_valid ||
+            diagnostic_emitted >= AP_RANGEFINDER_VL53L3CX_DIAG_REPORT_LIMIT ||
+            (diagnostic_have_reported &&
+             uint32_t(now_ms - diagnostic_last_report_ms) < AP_RANGEFINDER_VL53L3CX_DIAG_REPORT_INTERVAL_MS)) {
+            return;
+        }
+        record = diagnostic_pending;
+        suppressed = diagnostic_suppressed;
+        diagnostic_pending_valid = false;
+        diagnostic_emitted = vl53l3cx_diagnostic_increment(diagnostic_emitted);
+        diagnostic_last_report_ms = now_ms;
+        diagnostic_have_reported = true;
+    }
+
+    if (record.event == DiagnosticEvent::API_ERROR) {
+        const char *operation = "none";
+        switch (record.operation) {
+        case DiagnosticOperation::READY:
+            operation = "ready";
+            break;
+        case DiagnosticOperation::RANGING_DATA:
+            operation = "ranging-data";
+            break;
+        case DiagnosticOperation::CLEAR_INTERRUPT:
+            operation = "clear-interrupt";
+            break;
+        case DiagnosticOperation::NONE:
+            break;
+        }
+        hal.console->printf("VL53L3CX diag: api=%s status=%d count=%lu suppressed=%lu\n",
+                            operation, int(record.api_status),
+                            (unsigned long)record.occurrences, (unsigned long)suppressed);
+    } else {
+        hal.console->printf("VL53L3CX diag: range-status=%u->%u objects=%u count=%lu suppressed=%lu\n",
+                            unsigned(record.previous_status), unsigned(record.new_status),
+                            unsigned(record.object_count),
+                            (unsigned long)record.occurrences, (unsigned long)suppressed);
+    }
+}
+#endif
+
 AP_RangeFinder_VL53L3CX::ReadResult AP_RangeFinder_VL53L3CX::get_reading(RawReading &reading)
 {
     reading = {};
@@ -360,6 +473,9 @@ AP_RangeFinder_VL53L3CX::ReadResult AP_RangeFinder_VL53L3CX::get_reading(RawRead
     ESP32::FlightLoadDiagnostics::vl53_data_ready(ready != 0);
 #endif
     if (status != VL53LX_ERROR_NONE) {
+#if AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS
+        record_api_error(DiagnosticOperation::READY, VL53LX_Error(status));
+#endif
         return ReadResult::Error;
     }
     if (ready == 0) {
@@ -368,6 +484,12 @@ AP_RangeFinder_VL53L3CX::ReadResult AP_RangeFinder_VL53L3CX::get_reading(RawRead
 
     VL53LX_MultiRangingData_t ranging_data {};
     status = VL53LX_GetMultiRangingData(&vl53_device, &ranging_data);
+#if AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS
+    uint8_t selected_range_status = VL53LX_RANGESTATUS_NONE;
+    if (status != VL53LX_ERROR_NONE) {
+        record_api_error(DiagnosticOperation::RANGING_DATA, VL53LX_Error(status));
+    }
+#endif
 
     if (status == VL53LX_ERROR_NONE) {
         const uint8_t target_count = MIN(uint8_t(VL53LX_MAX_RANGE_RESULTS),
@@ -391,6 +513,9 @@ AP_RangeFinder_VL53L3CX::ReadResult AP_RangeFinder_VL53L3CX::get_reading(RawRead
                  (reading.raw_mm <= 0 || target.RangeMilliMeter > reading.raw_mm))) {
                 selected_priority = priority;
                 reading.raw_mm = target.RangeMilliMeter;
+#if AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS
+                selected_range_status = target.RangeStatus;
+#endif
                 reading.classified_mm = target.RangeMilliMeter > 0 ?
                     uint16_t(target.RangeMilliMeter) : 0;
                 reading.classified_status = target_status;
@@ -407,10 +532,18 @@ AP_RangeFinder_VL53L3CX::ReadResult AP_RangeFinder_VL53L3CX::get_reading(RawRead
     }
 
     const int clear_status = VL53LX_ClearInterruptAndStartMeasurement(&vl53_device);
+#if AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS
+    if (clear_status != VL53LX_ERROR_NONE) {
+        record_api_error(DiagnosticOperation::CLEAR_INTERRUPT, VL53LX_Error(clear_status));
+    }
+#endif
     if (status != VL53LX_ERROR_NONE || clear_status != VL53LX_ERROR_NONE) {
         return ReadResult::Error;
     }
 
+#if AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS
+    record_range_status(selected_range_status, ranging_data.NumberOfObjectsFound);
+#endif
     return ReadResult::Complete;
 }
 
@@ -549,6 +682,9 @@ void AP_RangeFinder_VL53L3CX::timer()
 
 void AP_RangeFinder_VL53L3CX::update()
 {
+#if AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS
+    service_diagnostics();
+#endif
     WITH_SEMAPHORE(sem);
 
     const uint32_t now_ms = AP_HAL::millis();

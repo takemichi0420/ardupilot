@@ -2,6 +2,10 @@
 
 #include "AP_RangeFinder_config.h"
 
+#ifndef AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS
+#define AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS 0
+#endif
+
 #if AP_RANGEFINDER_VL53L3CX_ENABLED
 
 #include "AP_RangeFinder.h"
@@ -50,6 +54,35 @@ private:
         uint16_t classified_mm {};
         RangeFinder::Status classified_status {RangeFinder::Status::NoData};
     };
+
+#if AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS
+    enum class DiagnosticEvent : uint8_t { API_ERROR, RANGE_STATUS_CHANGE };
+    enum class DiagnosticOperation : uint8_t { NONE, READY, RANGING_DATA, CLEAR_INTERRUPT };
+    struct DiagnosticRecord {
+        DiagnosticEvent event {};
+        DiagnosticOperation operation {};
+        VL53LX_Error api_status {};
+        uint8_t previous_status {};
+        uint8_t new_status {};
+        uint8_t object_count {};
+        uint32_t occurrences {};
+    };
+    // All diagnostic state is protected by the existing backend semaphore.
+    // One regular update context consumes records; callbacks only publish.
+    DiagnosticRecord diagnostic_pending {};
+    uint32_t diagnostic_suppressed {};
+    uint32_t diagnostic_emitted {};
+    uint32_t diagnostic_last_report_ms {};
+    uint8_t diagnostic_previous_status {};
+    bool diagnostic_have_status {};
+    bool diagnostic_pending_valid {};
+    bool diagnostic_have_reported {};
+
+    void queue_diagnostic_locked(const DiagnosticRecord &record);
+    void record_api_error(DiagnosticOperation operation, VL53LX_Error api_status);
+    void record_range_status(uint8_t range_status, uint8_t object_count);
+    void service_diagnostics();
+#endif
 
     ReadResult get_reading(RawReading &reading);
     RangeFinder::Status classify_target(uint8_t range_status, int16_t range_mm) const;
