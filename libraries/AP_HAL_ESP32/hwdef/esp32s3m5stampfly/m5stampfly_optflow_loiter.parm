@@ -1,0 +1,32 @@
+# Optional M5Stamp Fly GPS-less OpticalFlow/Baro profile; load on the aircraft, not Atom JoyStick.
+# Navigation source configuration only; hardware drivers and calibration are separate.
+# Prerequisites: healthy EKF3/barometer; enabled and healthy OpticalFlow/downward RangeFinder.
+# Do not test AltHold/Loiter without a healthy barometer; HEAD board support is not guaranteed.
+# Keep the vehicle stationary during EKF initialization; verify source health before Loiter.
+# Use sufficient lighting and textured ground within the configured RangeFinder's valid range.
+# RangeFinder supplies terrain/ground distance for Flow velocity scaling, not primary POSZ.
+# Baro remains primary height; RangeFinder height switching and Surface Tracking are not enabled here.
+# Use source set 1; verify switching does not select another saved source set (2/3) during testing.
+# GPS hardware/checks are unchanged; this source set does not automatically switch to GPS navigation.
+# Yaw has no external absolute observation; gyro-based yaw can drift.
+# Relative Flow navigation may work without global origin, but EKF failsafe behavior depends on it.
+# Before flight testing, verify/set EKF origin as appropriate and test failsafe with and without origin.
+# Flow loss can remove horizontal aiding; automatic fallback to AltHold is not guaranteed.
+# RangeFinder NoData/OutOfRange can make Flow navigation unusable through loss of ground-distance scaling.
+# This profile provides no automatic sensor recovery and changes no arming/failsafe or RC/mode settings.
+# Before applying, save/download current parameters. Load this optional profile and reboot.
+# After reboot, verify parameter values, source set 1 and EKF/sensor health.
+# To revert, restore the parameter backup or changed parameters explicitly; deleting this file does not reset them.
+# Loading this profile does not prove that AltHold or Loiter is safe or ready for flight.
+AHRS_EKF_TYPE 3
+EK3_ENABLE 1
+
+EK3_SRC1_POSXY 0
+EK3_SRC1_VELXY 5
+EK3_SRC1_POSZ 1
+EK3_SRC1_VELZ 0
+EK3_SRC1_YAW 0
+
+EK3_SRC_OPTIONS 0
+EK3_FLOW_USE 1
+EK3_RNG_USE_HGT -1
