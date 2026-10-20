@@ -35,6 +35,7 @@
 #include <AP_HAL/SIMState.h>
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #include <AP_HAL_ESP32/FlightLoadDiagnostics.h>
+#include <AP_HAL_ESP32/EKF3BlockDiagnostics.h>
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
 #include <SITL/SITL.h>
@@ -193,6 +194,9 @@ void AP_Scheduler::run(uint32_t time_available)
 {
 #if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
     ESP32::FlightLoadDiagnostics::scheduler_loop_begin();
+#endif
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+    ESP32::EKF3BlockDiagnostics::scheduler_loop_begin();
 #endif
     uint32_t run_started_usec = AP_HAL::micros();
     uint32_t now = run_started_usec;
@@ -439,6 +443,16 @@ void AP_Scheduler::loop()
         perf_info.get_filtered_loop_rate_hz(),
         hal.util->get_soft_armed(),
         flight_mode);
+#endif
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+    AP_Vehicle *ekf_diag_vehicle = AP_Vehicle::get_singleton();
+    const uint8_t ekf_diag_mode = ekf_diag_vehicle != nullptr ?
+        ekf_diag_vehicle->get_mode() : UINT8_MAX;
+    ESP32::EKF3BlockDiagnostics::scheduler_loop_end(
+        loop_dt_us,
+        perf_info.get_filtered_loop_rate_hz(),
+        hal.util->get_soft_armed(),
+        ekf_diag_mode);
 #endif
         
     _loop_timer_start_us = sample_time_us;

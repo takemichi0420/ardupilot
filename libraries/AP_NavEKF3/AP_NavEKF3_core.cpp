@@ -5,6 +5,7 @@
 #include <GCS_MAVLink/GCS.h>
 #include <AP_VisualOdom/AP_VisualOdom.h>
 #include <AP_Logger/AP_Logger.h>
+#include <AP_HAL_ESP32/EKF3BlockDiagnostics.h>
 #include <AP_DAL/AP_DAL.h>
 
 // constructor
@@ -639,8 +640,21 @@ void NavEKF3_core::CovarianceInit()
 // Update Filter States - this should be called whenever new IMU data is available
 void NavEKF3_core::UpdateFilter(bool predict)
 {
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+    uint32_t block_us[ESP32::EKF3BlockDiagnostics::BLOCK_COUNT] {};
+    uint32_t diag_mark_us = AP_HAL::micros();
+#endif
+
     // don't run filter updates if states have not been initialised
     if (!statesInitialised) {
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+        ESP32::EKF3BlockDiagnostics::record_update(
+            core_index,
+            predict,
+            false,
+            false,
+            block_us);
+#endif
         return;
     }
 
@@ -656,6 +670,11 @@ void NavEKF3_core::UpdateFilter(bool predict)
 
     // read IMU data as delta angles and velocities
     readIMUData(predict);
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+    uint32_t diag_now_us = AP_HAL::micros();
+    block_us[0] = diag_now_us - diag_mark_us;
+    diag_mark_us = diag_now_us;
+#endif
 
     // Run the EKF equations to estimate at the fusion time horizon if new IMU data is available in the buffer
     if (runUpdates) {
@@ -664,6 +683,11 @@ void NavEKF3_core::UpdateFilter(bool predict)
 
         // Predict the covariance growth
         CovariancePrediction(nullptr);
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+        diag_now_us = AP_HAL::micros();
+        block_us[1] = diag_now_us - diag_mark_us;
+        diag_mark_us = diag_now_us;
+#endif
 
         // Run the IMU prediction step for the GSF yaw estimator algorithm
         // using IMU and optionally true airspeed data.
@@ -681,16 +705,31 @@ void NavEKF3_core::UpdateFilter(bool predict)
         // Muat be run after SelectVelPosFusion() so that fresh GPS data is available
         runYawEstimatorCorrection();
 
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+        diag_now_us = AP_HAL::micros();
+        block_us[2] = diag_now_us - diag_mark_us;
+        diag_mark_us = diag_now_us;
+#endif
 #if EK3_FEATURE_BEACON_FUSION
         // Update states using range beacon data
         SelectRngBcnFusion();
 #endif
 
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+        diag_now_us = AP_HAL::micros();
+        block_us[4] = diag_now_us - diag_mark_us;
+        diag_mark_us = diag_now_us;
+#endif
 #if EK3_FEATURE_OPTFLOW_FUSION
         // Update states using optical flow data
         SelectFlowFusion();
 #endif
 
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+        diag_now_us = AP_HAL::micros();
+        block_us[3] = diag_now_us - diag_mark_us;
+        diag_mark_us = diag_now_us;
+#endif
 #if EK3_FEATURE_BODY_ODOM
         // Update states using body frame odometry data
         SelectBodyOdomFusion();
@@ -711,10 +750,25 @@ void NavEKF3_core::UpdateFilter(bool predict)
             moveEKFOrigin();
             checkUpdateEarthField();
         }
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+        diag_now_us = AP_HAL::micros();
+        block_us[4] += diag_now_us - diag_mark_us;
+        diag_mark_us = diag_now_us;
+#endif
     }
 
     // Wind output forward from the fusion to output time horizon
     calcOutputStates();
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+    diag_now_us = AP_HAL::micros();
+    block_us[5] = diag_now_us - diag_mark_us;
+    ESP32::EKF3BlockDiagnostics::record_update(
+        core_index,
+        predict,
+        true,
+        runUpdates,
+        block_us);
+#endif
 
     /*
       this is a check to cope with a vehicle sitting idle on the

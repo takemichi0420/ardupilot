@@ -1,4 +1,5 @@
 #include <AP_HAL/AP_HAL.h>
+#include <AP_HAL_ESP32/EKF3BlockDiagnostics.h>
 
 #include "AP_NavEKF3.h"
 
@@ -20,6 +21,9 @@
 // select fusion of optical flow measurements
 void NavEKF3_core::SelectFlowFusion()
 {
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+    ESP32::EKF3BlockDiagnostics::flow_selection(core_index);
+#endif
     // Check if the magnetometer has been fused on that time step and the filter is running at faster than 200 Hz
     // If so, don't fuse measurements on this time step to reduce frame over-runs
     // Only allow one time slip to prevent high rate magnetometer data preventing fusion of other measurements
@@ -288,6 +292,9 @@ void NavEKF3_core::EstimateTerrainOffset(const of_elements &ofDataDelayed)
 */
 void NavEKF3_core::FuseOptFlow(const of_elements &ofDataDelayed, bool really_fuse)
 {
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+    ESP32::EKF3BlockDiagnostics::flow_fusion(core_index, really_fuse);
+#endif
     Vector24 H_LOS;
     Vector2 losPred;
 

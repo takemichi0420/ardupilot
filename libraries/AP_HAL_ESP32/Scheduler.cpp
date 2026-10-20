@@ -18,6 +18,7 @@
 #include "AP_HAL_ESP32/AnalogIn.h"
 #include "AP_HAL_ESP32/ESPNowBridge.h"
 #include "AP_HAL_ESP32/FlightLoadDiagnostics.h"
+#include "AP_HAL_ESP32/EKF3BlockDiagnostics.h"
 #include "AP_Math/AP_Math.h"
 #include "SdCard.h"
 #include "Profile.h"
@@ -441,6 +442,9 @@ void IRAM_ATTR Scheduler::_io_thread(void* arg)
         sched->_run_io();
 #if HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
         FlightLoadDiagnostics::service_output();
+#endif
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+        EKF3BlockDiagnostics::service_output();
 #endif
 
         if (!hal.util->get_soft_armed()) {

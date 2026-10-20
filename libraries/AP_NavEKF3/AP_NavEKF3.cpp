@@ -5,6 +5,7 @@
 #include <AP_HAL/AP_HAL.h>
 
 #include <GCS_MAVLink/GCS.h>
+#include <AP_HAL_ESP32/EKF3BlockDiagnostics.h>
 #include <AP_Logger/AP_Logger.h>
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
@@ -942,6 +943,14 @@ void NavEKF3::UpdateFilter(void)
     }
 
     imuSampleTime_us = dal.micros64();
+
+#if HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+    ESP32::EKF3BlockDiagnostics::set_metadata(
+        num_cores,
+        primary,
+        uint8_t(_imuMask.get()),
+        _framesPerPrediction);
+#endif
 
     for (uint8_t i=0; i<num_cores; i++) {
         // if we have not overrun by more than 3 IMU frames, and we
