@@ -1,0 +1,25 @@
+# Optional M5Stamp Fly EKF3 block diagnostics overlay.
+# Requires the ignored local diagnostic.hwdef, which may contain credentials.
+# Keep credentials local; select this overlay explicitly with --extra-hwdef.
+include diagnostic.hwdef
+
+undef HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS
+define HAL_ESP32_FLIGHT_LOAD_DIAGNOSTICS 0
+
+undef HAL_ESP32_LOOP_RATE_DEBUG
+define HAL_ESP32_LOOP_RATE_DEBUG 0
+
+undef HAL_ESP32_I2C_DIAGNOSTICS
+define HAL_ESP32_I2C_DIAGNOSTICS 0
+
+undef AP_RC_AUX_DIAGNOSTICS
+define AP_RC_AUX_DIAGNOSTICS 0
+
+undef AP_RANGEFINDER_VL53L3CX_DIAG_GCS_TEXT_LIMIT
+define AP_RANGEFINDER_VL53L3CX_DIAG_GCS_TEXT_LIMIT 0
+
+undef AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS
+define AP_RANGEFINDER_VL53L3CX_DIAGNOSTICS 0
+
+undef HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS
+define HAL_ESP32_EKF3_BLOCK_DIAGNOSTICS 1
