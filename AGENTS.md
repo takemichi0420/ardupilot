@@ -394,3 +394,77 @@ Open a discussion before writing code if:
 - **Do not move functions around without goal**: Keep the original code structure as possible.
 - **Do not add comment on all functions/lines**: Document only what was change and useful for future reading.
 - **Do not duplicate PRs**: If a PR was already open on a feature/bugfix/changes recently, do not duplicate it.
+
+---
+
+## M5Stamp Fly project-specific guidance
+
+This section supplements the repository-wide upstream rules above; it does not
+replace them. It applies primarily to `esp32s3m5stampfly`, Atom JoyStick ESP-NOW
+control, M5Stamp Fly diagnostics, and related parameter/profile work.
+
+### ESP-NOW button and RC behavior
+
+The current implementation is in `libraries/AP_HAL_ESP32/ESPNowButtons.h` and
+`libraries/AP_HAL_ESP32/ESPNowBridge.cpp`.
+
+| Button | Short press: release before 1000 ms | Long press: hold at least 1000 ms |
+|---|---|---|
+| L | ALT_HOLD | LOITER |
+| R | DISARM request | ARM request |
+
+- After a recognized long press, releasing that same press must not execute the
+  short action. A new L short press can select ALT_HOLD after LOITER.
+- ARM requests are allowed only when `RC3 <= 1050`. If high throttle rejects a
+  long ARM request, releasing R must not generate a DISARM short action.
+- Centered Atom JoyStick throttle produces `packet.z = 500`, approximately
+  `RC3 = 1500`; this is above the ARM throttle gate.
+- ESP-NOW ARM requests retain normal ArduPilot PreArm checks. Disabling safety
+  checks must not become the normal diagnostic or test procedure.
+
+Expected M5Stamp Fly ESP-NOW control configuration (not repository-wide defaults):
+
+- RC5: ARM request = 2000, DISARM request = 1000, neutral = 1500;
+  pulse duration = 500 ms; `RC5_OPTION = 153`.
+- RC6 selects flight modes: ALT_HOLD uses alternating positions 1425 and 1555
+  (region 1425–1555); LOITER uses alternating positions 1685 and 1815
+  (region 1685–1815); `FLTMODE_CH = 6`, `RC6_OPTION = 0`.
+
+### Local diagnostic configuration and credentials
+
+- `libraries/AP_HAL_ESP32/hwdef/esp32s3m5stampfly/diagnostic.hwdef` is ignored,
+  local-only, and may contain Wi-Fi credentials. Never stage or commit it.
+- `diagnostic.example.hwdef` in the same directory is the tracked template.
+  Keep it limited to placeholders and public examples; never insert real SSIDs,
+  passwords, or other credentials.
+- Generated `hwdef.h` files can expand local diagnostic values, including
+  credentials. Keep `build-*` outputs, generated headers, firmware binaries,
+  and ELF files out of source commits.
+- Never stage, commit, display, or log real passwords, tokens, private keys, or
+  other credentials. Do not expose Wi-Fi passwords in console, GCS, or debug
+  output, README files, or example configurations.
+- Use placeholders or anonymized examples for new device-specific MAC addresses
+  and unique identifiers in documentation and examples.
+
+### Project work boundaries and validation
+
+- In a mixed working tree, stage only explicitly reviewed paths or minimal
+  reviewed hunks; avoid `git add .`, `git add -A`, and `git add -u`.
+- Keep functional changes, diagnostics, board tuning, hardware calibration, and
+  documentation in distinct scopes. Do not mix unrelated changes in one commit;
+  local credential configuration remains outside commits entirely.
+- Optional diagnostics should default OFF and preserve normal production
+  behavior when disabled.
+- Do not promote working-tree experiments in I2C speed, VL53 callback timing,
+  BMP280 support, or RangeFinder calibration into established project defaults.
+- Do not mix deferred VL53 recovery/tuning into unrelated commits.
+- `libraries/AP_HAL_ESP32/hwdef/esp32s3m5stampfly/m5stampfly_optflow_loiter.parm`
+  is an optional navigation profile, not a board default or a flight-ready claim.
+- Distinguish target compilation, SITL results, and hardware verification in
+  documentation and comments. Do not call untested hardware behavior verified.
+- Keep hardware tests separate from source work; identify the firmware and
+  expected outcome, remove propellers unless a propeller-on test is explicitly
+  required, and obtain an explicit request before ARM/DISARM or flight commands.
+- `STATUS.md` is a temporary local handoff memo and may be stale; it is not a
+  canonical source of project policy or control specifications. Check current
+  implementation and explicit task instructions before relying on its notes.
