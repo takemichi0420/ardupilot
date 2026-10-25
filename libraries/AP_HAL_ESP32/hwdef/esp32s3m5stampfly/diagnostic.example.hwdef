@@ -6,7 +6,6 @@
 
 # Optional low-level I2C diagnostics. Leave disabled for flight-test builds.
 define HAL_ESP32_I2C_DIAGNOSTICS 0
-define HAL_BARO_ALLOW_INIT_NO_BARO
 
 # Join an iPhone Personal Hotspot instead of creating an ESP32 access point.
 undef WIFI_STATION

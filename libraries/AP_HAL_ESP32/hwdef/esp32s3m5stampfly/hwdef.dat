@@ -54,9 +54,8 @@ ESP32_I2CBUS  I2C_NUM_1  GPIO_NUM_13 GPIO_NUM_15 400*KHZ  false    false
 # one IMU:
 IMU BMI270 SPI:bmi270 ROTATION_ROLL_180_YAW_90
 
-# Connection-recovery diagnostic: do not let a missing BMP280 stop vehicle init.
-# The production configuration should restore the probe after the I2C fault is fixed.
-# BARO BMP280 I2C:0:0x76
+# Onboard BMP280 barometer on the internal I2C bus.
+BARO BMP280 I2C:0:0x76
 define HAL_BARO_ALLOW_INIT_NO_BARO
 
 # HARDWARE UARTS. UART 0 apparently goes over USB? so we assign it to pins we
