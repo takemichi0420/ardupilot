@@ -11,6 +11,7 @@
 #include <AC_PID/AC_PID.h>
 #include <AC_PID/AC_P.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
+#include "AC_AttitudeControl_config.h"
 
 #define AC_ATTITUDE_CONTROL_ANGLE_P                     4.5f             // default angle P gain for roll, pitch and yaw
 
@@ -540,6 +541,11 @@ public:
     // write ANG message
     void Write_ANG() const;
 
+#if AC_ATTITUDE_CONTROL_YAW_DIAGNOSTICS_ENABLED && HAL_LOGGING_ENABLED
+    // Write the yaw diagnostic snapshot from the attitude logging task.
+    void Write_YDBG() const;
+#endif
+
     // perform any required parameter conversions
     void convert_parameters();
 
@@ -604,6 +610,11 @@ protected:
     Vector3f            _rate_gyro_rads;
     // timestamp of the latest gyro measurement (in microseconds) value used by the rate controller
     uint64_t            _rate_gyro_time_us;
+
+#if AC_ATTITUDE_CONTROL_YAW_DIAGNOSTICS_ENABLED && HAL_LOGGING_ENABLED
+    float               _last_yaw_angle_error_rad {};
+    uint64_t            _yaw_angle_error_time_us {};
+#endif
 
     // Intersampling period in seconds
     float               _dt_s;

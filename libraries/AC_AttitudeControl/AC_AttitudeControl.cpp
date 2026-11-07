@@ -996,6 +996,12 @@ void AC_AttitudeControl::attitude_controller_run_quat()
     Vector3f attitude_error;
     thrust_heading_rotation_angles(_attitude_target, attitude_body, attitude_error, _thrust_angle_rad, _thrust_error_angle_rad);
 
+#if AC_ATTITUDE_CONTROL_YAW_DIAGNOSTICS_ENABLED && HAL_LOGGING_ENABLED
+    // Preserve the controller input, including its heading-error limiting.
+    _last_yaw_angle_error_rad = attitude_error.z;
+    _yaw_angle_error_time_us = AP::scheduler().get_loop_start_time_us();
+#endif
+
     // Compute the angular velocity corrections in the body frame from the attitude error
     Vector3f ang_vel_body_rads = update_ang_vel_target_from_att_error(attitude_error);
 

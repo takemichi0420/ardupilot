@@ -27,6 +27,29 @@ void AC_AttitudeControl::Write_ANG() const
     AP::logger().WriteBlock(&pkt, sizeof(pkt));
 }
 
+// Write a yaw diagnostic packet without changing the existing ANG/RATE packets.
+#if AC_ATTITUDE_CONTROL_YAW_DIAGNOSTICS_ENABLED
+void AC_AttitudeControl::Write_YDBG() const
+{
+    const uint64_t time_us = AP::scheduler().get_loop_start_time_us();
+    const struct log_YDBG pkt {
+        LOG_PACKET_HEADER_INIT(LOG_YDBG_MSG),
+        time_us         : time_us,
+        error_time_us   : _yaw_angle_error_time_us,
+        rate_time_us    : _rate_gyro_time_us,
+        target_yaw      : wrap_360(degrees(get_att_target_euler_rad().z)),
+        yaw             : wrap_360(degrees(_ahrs.yaw)),
+        // Rate-only paths must not present an old angle error as current.
+        yaw_error       : _yaw_angle_error_time_us == time_us && time_us != 0 ?
+                          degrees(_last_yaw_angle_error_rad) : AP_Logger::quiet_nanf(),
+        target_rate     : degrees(rate_bf_targets().z),
+        rate            : degrees(_rate_gyro_rads.z),
+        yaw_out         : _motors.get_yaw() + _motors.get_yaw_ff()
+    };
+    AP::logger().WriteBlock(&pkt, sizeof(pkt));
+}
+#endif
+
 // Write a rate packet
 void AC_AttitudeControl::Write_Rate(const AC_PosControl &pos_control) const
 {

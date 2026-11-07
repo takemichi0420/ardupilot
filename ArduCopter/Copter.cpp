@@ -719,6 +719,12 @@ void Copter::ten_hz_logging_loop()
 // twentyfive_hz_logging - should be run at 25hz
 void Copter::twentyfive_hz_logging()
 {
+#if AC_ATTITUDE_CONTROL_YAW_DIAGNOSTICS_ENABLED
+    if (should_log(MASK_LOG_ATTITUDE_FAST | MASK_LOG_ATTITUDE_MED)) {
+        attitude_control->Write_YDBG();
+    }
+#endif
+
     if (should_log(MASK_LOG_ATTITUDE_FAST)) {
         Log_Write_EKF_POS();
     }

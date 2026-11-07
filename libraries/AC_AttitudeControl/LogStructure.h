@@ -1,6 +1,41 @@
 #pragma once
 
 #include <AP_Logger/LogStructure.h>
+#include "AC_AttitudeControl_config.h"
+
+#if AC_ATTITUDE_CONTROL_YAW_DIAGNOSTICS_ENABLED && HAL_LOGGING_ENABLED
+#define LOG_IDS_FROM_AC_ATTITUDECONTROL_YDBG LOG_YDBG_MSG,
+#define LOG_STRUCTURE_FROM_AC_ATTITUDECONTROL_YDBG \
+    { LOG_YDBG_MSG, sizeof(log_YDBG), \
+      "YDBG", "QQQffffff", "TimeUS,ErrUS,RateUS,YTarg,Yaw,YErr,RTarg,Rate,YOut", "sssdddkk-", "FFF000000", true },
+
+// @LoggerMessage: YDBG
+// @Description: Opt-in yaw attitude/rate diagnostic snapshot. YErr is NaN unless the quaternion attitude controller ran in this scheduler loop. RTarg includes rate limiting and feedforward, not only angle-error feedback.
+// @Field: TimeUS: Timestamp of the current attitude loop
+// @Field: ErrUS: Attitude loop timestamp when the controller's yaw angle error was captured
+// @Field: RateUS: Timestamp of the gyro sample used by the rate controller
+// @Field: YTarg: Target Euler yaw angle, wrapped to 0-360 degrees
+// @Field: Yaw: Actual Euler yaw angle, wrapped to 0-360 degrees
+// @Field: YErr: Body-frame heading error actually passed to the angle controller
+// @Field: RTarg: Final body-frame yaw rate target, including system identification input
+// @Field: Rate: Actual body-frame yaw rate used by the rate controller
+// @Field: YOut: Normalized yaw feedback plus feedforward output
+struct PACKED log_YDBG {
+    LOG_PACKET_HEADER;
+    uint64_t time_us;
+    uint64_t error_time_us;
+    uint64_t rate_time_us;
+    float target_yaw;
+    float yaw;
+    float yaw_error;
+    float target_rate;
+    float rate;
+    float yaw_out;
+};
+#else
+#define LOG_IDS_FROM_AC_ATTITUDECONTROL_YDBG
+#define LOG_STRUCTURE_FROM_AC_ATTITUDECONTROL_YDBG
+#endif
 
 #define LOG_IDS_FROM_AC_ATTITUDECONTROL \
     LOG_PSCN_MSG, \
@@ -10,6 +45,7 @@
     LOG_PSOE_MSG, \
     LOG_PSOD_MSG, \
     LOG_PSOT_MSG, \
+    LOG_IDS_FROM_AC_ATTITUDECONTROL_YDBG \
     LOG_ANG_MSG
 
 // @LoggerMessage: PSCN
@@ -200,5 +236,6 @@ struct PACKED log_ANG {
       "PSOT", PSOx_FMT, "TimeUS,TPOT,POT,TVOT,VOT,TAOT,AOT", PSOx_UNITS, PSOx_MULTS }, \
     { LOG_RATE_MSG, sizeof(log_Rate), \
         "RATE", "Qfffffffffffff",  "TimeUS,RDes,R,ROut,PDes,P,POut,YDes,Y,YOut,ADes,A,AOut,AOutSlew", "skk-kk-kk-oo--", "F?????????BB--" , true }, \
+    LOG_STRUCTURE_FROM_AC_ATTITUDECONTROL_YDBG \
     { LOG_ANG_MSG, sizeof(log_ANG),\
         "ANG", "Qfffffff", "TimeUS,DesRoll,Roll,DesPitch,Pitch,DesYaw,Yaw,Dt", "sddddhhs", "F0000000" , true }
