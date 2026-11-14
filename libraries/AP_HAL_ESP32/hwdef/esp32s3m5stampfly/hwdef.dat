@@ -58,6 +58,9 @@ IMU BMI270 SPI:bmi270 ROTATION_ROLL_180_YAW_90
 BARO BMP280 I2C:0:0x76
 define HAL_BARO_ALLOW_INIT_NO_BARO
 
+# one Compass:
+COMPASS BMM150 I2C:0:0x10 false ROTATION_NONE
+
 # HARDWARE UARTS. UART 0 apparently goes over USB? so we assign it to pins we
 # don't have mapped to anything. might be fixable in the HAL...
 # UART 1 (SERIAL3) is the black grove connector
